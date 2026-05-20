@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparql-mcp-server"
+version = "0.0.1"
+description = "Clean MCP server skeleton for SPARQL experiments (no tools yet)"
+readme = "README.md"
+authors = [{name = "SPARQL-MCP Team"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.0.0",
+  "uvicorn>=0.30.0",
+  "fastapi>=0.111.0",
+  "rdflib>=7.0.0",
+  "SPARQLWrapper>=2.0.0",
+  "requests>=2.31.0",
+]
+
+[project.scripts]
+sparql-mcp-stdio = "sparql_mcp_server.server:main"
+sparql-mcp-web = "sparql_mcp_server.web:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["sparql_mcp_server"]
