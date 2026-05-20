@@ -26,3 +26,5 @@ Antarmuka chatbot/pencarian terinspirasi dari [WU Search AI](https://search.ai.w
 - Ekelhart, A. et al. (2024). RAGE-KG: Retrieval-Augmented Generation with Enterprise Knowledge Graphs. [UniVie](https://eprints.cs.univie.ac.at/8178/)
 - [SPARQL-MCP GitHub](https://github.com/semantisch/sparqlmcp)
 - [WU Search AI](https://search.ai.wu.ac.at/)
+
+Disclaimer: All rights, intellectual property, credits, and original licenses for the SPARQL-MCP framework belong entirely to the original creators (https://github.com/semantisch/sparqlmcp). This commit is solely for integrating their work into our project environment. We do not claim ownership of these specific framework files.
