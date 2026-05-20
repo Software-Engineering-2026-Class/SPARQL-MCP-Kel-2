@@ -8,6 +8,33 @@ Proyek ini mengimplementasikan sistem agentic AI untuk analisis keamanan siber y
 
 Antarmuka chatbot/pencarian terinspirasi dari [WU Search AI](https://search.ai.wu.ac.at/), dan basis knowledge graph menggunakan dataset [SEPSES CSKG](https://sepses.ifs.tuwien.ac.at/).
 
+## Dokumentasi
+
+Saat ini repository ini berisi modul **SPARQL-MCP Server** yang tersimpan di `main/sparqlmcp-main/`. Dokumentasi lengkap (setup, konfigurasi `.env`, dan cara menjalankan server) tersedia di:
+
+- `main/sparqlmcp-main/README.md`
+
+## Struktur Folder (Saat Ini)
+
+```
+.
+├─ LICENSE
+├─ README.md
+└─ main/
+	└─ sparqlmcp-main/
+		├─ .env.example
+		├─ .gitignore
+		├─ pyproject.toml
+		├─ README.md
+		├─ requirements.txt
+		└─ src/
+			└─ sparql_mcp_server/
+				├─ __init__.py
+				├─ handlers.py
+				├─ server.py
+				└─ web.py
+```
+
 
 ## Anggota Kelompok
 
