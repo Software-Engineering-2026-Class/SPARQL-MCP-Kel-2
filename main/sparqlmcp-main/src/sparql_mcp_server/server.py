@@ -40,6 +40,14 @@ def _looks_like_service_description(text: str) -> bool:
     return "sparql-service-description" in lowered or "sd:service" in lowered
 
 
+def _resolve_ssl_verify() -> bool | str:
+    ca_bundle = os.environ.get("SPARQL_CA_BUNDLE", "").strip()
+    if ca_bundle:
+        return ca_bundle
+    verify_raw = os.environ.get("SPARQL_VERIFY_SSL", "true").strip().lower()
+    return verify_raw not in {"0", "false", "no", "off"}
+
+
 def _extract_void_linkset(text: str) -> str | None:
     formats = ["turtle", "xml", "json-ld", "n3"]
     graph = Graph()
@@ -146,7 +154,12 @@ def _http_get_text(
     allow_non_void: bool = False,
 ) -> str | None:
     try:
-        response = requests.get(url, headers={"Accept": accept}, timeout=timeout_s)
+        response = requests.get(
+            url,
+            headers={"Accept": accept},
+            timeout=timeout_s,
+            verify=_resolve_ssl_verify(),
+        )
         if response.status_code != 200:
             return None
         text = response.text
@@ -177,6 +190,7 @@ def _sparql_construct(
             params={"query": query},
             headers={"Accept": "text/turtle"},
             timeout=timeout_s,
+            verify=_resolve_ssl_verify(),
         )
         if response.status_code != 200:
             return None
@@ -199,6 +213,7 @@ def _sparql_select_json(endpoint: str, query: str, *, timeout_s: float = 10.0) -
             params={"query": query},
             headers={"Accept": "application/sparql-results+json"},
             timeout=timeout_s,
+            verify=_resolve_ssl_verify(),
         )
         if response.status_code != 200:
             return None
@@ -349,9 +364,10 @@ async def run() -> None:
             Tool(
                 name="run_sparql_query",
                 description=(
-                    "Execute a SPARQL 1.1 query. Queries must include SERVICE operators naming target SPARQL endpoints. "
-                    "If the query contains exactly one SERVICE, it is sent directly to that endpoint. "
-                    "If the query contains more than one SERVICE, it is executed via a local SPARQL federation endpoint."
+                    "Execute a SPARQL 1.1 query. If the query contains exactly one SERVICE and FORCE_FEDERATION is not enabled, "
+                    "it is sent directly to that endpoint. If the query contains more than one SERVICE, it is executed via the "
+                    "local SPARQL federation endpoint. If no SERVICE is present, the query is sent to DEFAULT_SPARQL_ENDPOINT "
+                    "when set (or FEDERATION_ENDPOINT as a fallback)."
                 ),
                 inputSchema={
                     "type": "object",
@@ -376,7 +392,8 @@ async def run() -> None:
                 name="get_void_descriptions",
                 description=(
                     "Retrieve cached VoID descriptions for one or more SPARQL endpoints. "
-                    "If not cached, the tool will report a miss (retrieval strategies are not implemented yet)."
+                    "If not cached, the tool attempts retrieval via well-known VoID URLs, VoID triples in the default graph, "
+                    "VoID in named graphs, and service-description links."
                 ),
                 inputSchema={
                     "type": "object",
@@ -407,19 +424,26 @@ async def run() -> None:
 
             # Determine how many SERVICE endpoints are in the query and route accordingly.
             service_uris = re.findall(r"SERVICE\s*<([^>]+)>", query or "", flags=re.IGNORECASE)
-            
-            # FORCE FEDERATION: Always route SERVICE queries through the local Fuseki Federator.
-            # This is required because the SERVICE URIs (e.g. http://fuseki-nyt:3030) are only 
-            # resolvable from within the Docker network, not from this host script.
-            # The "single service optimization" previously here broke this because it tried to
-            # connect to the internal Docker URI directly from the host.
-            
+
+            federation_endpoint = os.environ.get("FEDERATION_ENDPOINT", "http://localhost:3030/ds/sparql")
+            default_endpoint = os.environ.get("DEFAULT_SPARQL_ENDPOINT", "").strip()
+            force_federation = os.environ.get("FORCE_FEDERATION", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+            # FORCE_FEDERATION is useful when SERVICE URIs are only resolvable inside a Docker network.
             if service_uris:
-                 endpoint = os.environ.get("FEDERATION_ENDPOINT", "http://localhost:3030/ds/sparql")
+                if force_federation:
+                    endpoint = federation_endpoint
+                elif len(service_uris) == 1:
+                    endpoint = service_uris[0]
+                else:
+                    endpoint = federation_endpoint
             else:
-                 # If no SERVICE clause, default to localhost:3030 (or whatever is configured)
-                 # In this setup, we expect the agent to always use SERVICE as per prompt.
-                 endpoint = os.environ.get("FEDERATION_ENDPOINT", "http://localhost:3030/ds/sparql")
+                endpoint = default_endpoint or federation_endpoint
 
             result = await execute_sparql(
                 endpoint=endpoint,

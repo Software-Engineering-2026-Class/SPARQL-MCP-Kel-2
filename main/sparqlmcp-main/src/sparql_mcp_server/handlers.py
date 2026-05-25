@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -28,6 +29,14 @@ def _preview_rows(result_json: dict, max_rows: int = 10) -> str:
 
 def _preview_graph(text: str, max_lines: int = 20) -> str:
     return "\n".join(text.splitlines()[:max_lines]) or "(empty graph)"
+
+
+def _resolve_ssl_verify() -> bool | str:
+    ca_bundle = os.environ.get("SPARQL_CA_BUNDLE", "").strip()
+    if ca_bundle:
+        return ca_bundle
+    verify_raw = os.environ.get("SPARQL_VERIFY_SSL", "true").strip().lower()
+    return verify_raw not in {"0", "false", "no", "off"}
 
 
 async def execute_sparql(
@@ -60,7 +69,8 @@ async def execute_sparql(
             endpoint, 
             params=params, 
             headers=headers, 
-            timeout=timeout_ms / 1000
+            timeout=timeout_ms / 1000,
+            verify=_resolve_ssl_verify(),
         )
         response.raise_for_status()
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
