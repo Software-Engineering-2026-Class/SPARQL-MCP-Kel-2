@@ -1,3 +1,4 @@
 .env
 __pycache__/
 local_store/
+*.egg-info/
