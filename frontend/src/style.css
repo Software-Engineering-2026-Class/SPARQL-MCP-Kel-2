@@ -1,0 +1,190 @@
+/* =============================================================
+   CyberSec Search — Global Styles
+   TailwindCSS v4 + custom design tokens
+   ============================================================= */
+
+@import "tailwindcss";
+
+/* ------------ Custom Design Tokens ------------ */
+@theme {
+  /* Color Palette — Deep Navy Cybersecurity */
+  --color-navy-950: #050c1a;
+  --color-navy-900: #0a1628;
+  --color-navy-850: #0d1e35;
+  --color-navy-800: #0f2340;
+  --color-navy-750: #122a4a;
+  --color-navy-700: #163356;
+  --color-surface-card: #0e1c2f;
+  --color-surface-elevated: #111f33;
+  --color-surface-border: #1e3554;
+  --color-surface-hover: #162540;
+
+  /* Text */
+  --color-text-primary: #f0f4f8;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+  --color-text-dim: #475569;
+
+  /* Accent — Subtle Cyan/Blue */
+  --color-accent-cyan: #38bdf8;
+  --color-accent-blue: #60a5fa;
+  --color-accent-indigo: #818cf8;
+  --color-accent-glow: rgba(56, 189, 248, 0.12);
+
+  /* Semantic */
+  --color-danger: #f87171;
+  --color-danger-bg: rgba(248, 113, 113, 0.12);
+  --color-danger-border: rgba(248, 113, 113, 0.3);
+  --color-warning: #fbbf24;
+  --color-success: #34d399;
+
+  /* Typography */
+  --font-family-sans: 'Inter', system-ui, sans-serif;
+  --font-family-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Border Radius */
+  --radius-card: 0.5rem;
+  --radius-badge: 0.25rem;
+
+  /* Shadows */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(30, 53, 84, 0.6);
+  --shadow-elevated: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(30, 53, 84, 0.8);
+}
+
+/* ------------ Base Reset ------------ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #050c1a;
+  color: #f0f4f8;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------ Scrollbar ------------ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0a1628;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e3554;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #38bdf8;
+}
+
+/* ------------ Selection ------------ */
+::selection {
+  background: rgba(56, 189, 248, 0.25);
+  color: #f0f4f8;
+}
+
+/* ------------ Code Blocks ------------ */
+code,
+pre {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ------------ Transitions ------------ */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ------------ Custom Utilities ------------ */
+
+/* Card surface */
+.card-surface {
+  background-color: #0e1c2f;
+  border: 1px solid #1e3554;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(30, 53, 84, 0.6);
+}
+
+/* Elevated surface */
+.surface-elevated {
+  background-color: #111f33;
+  border: 1px solid #1e3554;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* Accent text */
+.text-accent {
+  color: #38bdf8;
+}
+
+/* Subtle glow border on focus */
+.focus-glow:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.4);
+}
+
+/* Star/particle background canvas */
+.bg-stars-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Content above background */
+.content-layer {
+  position: relative;
+  z-index: 1;
+}
+
+/* SPARQL syntax highlight tokens */
+.sparql-keyword { color: #60a5fa; font-weight: 600; }
+.sparql-prefix  { color: #818cf8; }
+.sparql-var     { color: #34d399; }
+.sparql-uri     { color: #f59e0b; }
+.sparql-string  { color: #fb923c; }
+.sparql-comment { color: #475569; font-style: italic; }
+.sparql-punct   { color: #94a3b8; }
+
+/* Fade slide utility */
+.fade-slide-up-enter-active { transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.fade-slide-up-enter-from   { opacity: 0; transform: translateY(16px); }
+
+/* Graph legend dot */
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border-width: 2px;
+  flex-shrink: 0;
+}
