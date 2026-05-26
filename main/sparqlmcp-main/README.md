@@ -56,6 +56,47 @@ FORCE_FEDERATION=false
 
 If your `SERVICE` URIs are only resolvable inside Docker, set `FORCE_FEDERATION=true` and point `FEDERATION_ENDPOINT` at your local federator.
 
+#### Local Fuseki with Docker
+
+This repo includes a minimal Fuseki Docker Compose file to run a local SPARQL endpoint.
+
+Start Fuseki:
+
+```bash
+docker compose -f docker-compose.yml up -d
+```
+
+Open the admin UI:
+
+- http://localhost:3030
+
+Login with username `admin` and the password set in `docker-compose.yml` (`ADMIN_PASSWORD`).
+
+Create a dataset named `cskg`, then your SPARQL endpoint becomes:
+
+- http://localhost:3030/cskg/sparql
+
+Update `.env` to point to Fuseki:
+
+```bash
+DEFAULT_SPARQL_ENDPOINT=http://localhost:3030/cskg/sparql
+FEDERATION_ENDPOINT=http://localhost:3030/cskg/sparql
+FORCE_FEDERATION=false
+```
+
+Change the admin password in `docker-compose.yml` before any shared or production deployment.
+
+#### Load seed data into Fuseki (optional)
+
+Seed files are in `database/seed data/` as `.ttl.gz`. Extract them to `.ttl`, then upload via the
+Fuseki UI `add data` tab for dataset `cskg`.
+
+Verify data was loaded:
+
+```sparql
+SELECT (COUNT(*) AS ?triples) WHERE { ?s ?p ?o }
+```
+
 ### 3. Running with MCP Clients
 
 #### For Cursor
@@ -140,3 +181,11 @@ You should see a preview plus JSON results in the tool response.
 
 If you hit `SSLCertVerificationError` with SEPSES, either set `SPARQL_VERIFY_SSL=false`
 for local testing or provide a valid CA bundle path in `SPARQL_CA_BUNDLE`.
+
+For local Fuseki testing, you can use:
+
+```sparql
+SELECT * WHERE {
+  SERVICE <http://localhost:3030/cskg/sparql> { ?s ?p ?o }
+} LIMIT 1
+```

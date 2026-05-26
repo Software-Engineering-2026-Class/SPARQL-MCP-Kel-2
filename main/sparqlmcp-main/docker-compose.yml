@@ -1,14 +1,14 @@
-version: "3.8"
+version: "3.9"
 services:
   fuseki:
-    image: secoresearch/fuseki:latest
-    container_name: cskg_fuseki
+    image: stain/jena-fuseki:latest
+    container_name: fuseki
     ports:
       - "3030:3030"
     environment:
-      - ADMIN_PASSWORD=admin123
+      ADMIN_PASSWORD: "admin123"
     volumes:
-      - fuseki_data:/fuseki/databases
+      - fuseki-data:/fuseki
     restart: unless-stopped
 volumes:
-  fuseki_data:
+  fuseki-data:
