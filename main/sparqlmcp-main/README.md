@@ -33,10 +33,20 @@ Create a `.env` file in the root directory (or update the existing one). **Note:
 | `SPARQL_TIMEOUT_SECONDS` | Timeout for SPARQL queries in seconds | `60` |
 | `SPARQL_VERIFY_SSL` | Verify TLS certificates for SPARQL HTTP requests | `true` |
 | `SPARQL_CA_BUNDLE` | Path to a custom CA bundle (overrides `SPARQL_VERIFY_SSL`) | `` |
+| `DEFAULT_QUERY_LIMIT` | Default LIMIT added to generated SPARQL | `100` |
+| `MAX_QUERY_CHARS` | Maximum accepted SPARQL length | `8000` |
 | `VOID_CACHE_TTL_SECONDS` | How long to cache VoID descriptions (seconds) | `604800` (7 days) |
 | `VOID_HTTP_TIMEOUT_SECONDS`| Timeout for fetching VoID via HTTP | `60` |
 | `VOID_SPARQL_TIMEOUT_SECONDS`| Timeout for fetching VoID via SPARQL | `60` |
 | `EXPOSED_TOOLS` | Comma-separated list of tools to expose to the client | `run_sparql_query,get_void_descriptions` |
+| `LLM_PROVIDER` | LLM backend | `openai_compat` |
+| `OPENAI_COMPAT_API_KEY` | OpenAI-compatible API key (if `LLM_PROVIDER=openai_compat`) | `` |
+| `OPENAI_COMPAT_BASE_URL` | Base URL for OpenAI-compatible router | `` |
+| `OPENAI_COMPAT_MODEL` | Router model name | `smart-chat` |
+| `OPENAI_COMPAT_MAX_TOKENS` | Max tokens for router responses | `800` |
+| `OPENAI_COMPAT_TEMPERATURE` | Router temperature setting | `0.2` |
+| `CORS_ALLOW_ORIGINS` | Comma-separated allowed origins for the API | `http://localhost:5173` |
+| `ALLOWED_ENDPOINTS` | Comma-separated SERVICE endpoint allowlist | `` |
 
 #### CSKG endpoint options
 
@@ -85,6 +95,20 @@ FORCE_FEDERATION=false
 ```
 
 Change the admin password in `docker-compose.yml` before any shared or production deployment.
+
+#### Local Backend + Fuseki (Docker)
+
+Run the backend API together with Fuseki using the local compose file:
+
+```bash
+docker compose -f docker-compose.local.yml up -d
+```
+
+This starts:
+- Backend API: http://localhost:8765
+- Fuseki UI: http://localhost:3030
+
+Make sure `.env` includes your LLM provider key before starting the backend.
 
 #### Load seed data into Fuseki (optional)
 
@@ -139,6 +163,14 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json`:
   sparql-mcp-web
   # visit http://localhost:8765/health
   ```
+
+### Backend API (FastAPI)
+
+When `sparql-mcp-web` is running, these endpoints are available:
+
+- `POST /api/nl2sparql` - generate SPARQL with the configured LLM provider and execute it
+- `POST /api/query` - execute raw SPARQL
+- `GET /api/health` - API health check
 
 ## Available tools
 
