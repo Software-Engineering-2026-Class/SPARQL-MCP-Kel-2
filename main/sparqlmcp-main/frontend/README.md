@@ -93,6 +93,20 @@ npm run preview
 
 ---
 
+## Backend Integration (Optional)
+
+To use the live backend API (Claude + SPARQL), create a `.env` file in this folder:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8765
+VITE_USE_LIVE_API=true
+```
+
+When enabled, the UI will call the backend for SPARQL generation and keep the
+mock entity cards until a full result mapping is implemented.
+
+---
+
 ## Application States
 
 ### State 1 — Home / Search Screen (`/`)

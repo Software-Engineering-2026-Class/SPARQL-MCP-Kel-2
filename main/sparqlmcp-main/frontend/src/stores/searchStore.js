@@ -7,6 +7,10 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { mockResults, mockSparqlQuery } from '@/data/mockData.js'
 
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const useLiveApi = import.meta.env.VITE_USE_LIVE_API === 'true'
+const shouldUseLiveApi = useLiveApi && apiBaseUrl.length > 0
+
 /**
  * Search Store — manages the current query, loading state,
  * search results, and the generated SPARQL query string.
@@ -24,6 +28,12 @@ export const useSearchStore = defineStore('search', () => {
 
   /** Generated SPARQL query from the search */
   const sparqlQuery = ref('')
+
+  /** Raw SPARQL results (live API) */
+  const rawResults = ref(null)
+
+  /** Last API error, if any */
+  const lastError = ref(null)
 
   /** Whether the SPARQL accordion is open */
   const sparqlAccordionOpen = ref(false)
@@ -52,6 +62,37 @@ export const useSearchStore = defineStore('search', () => {
     results.value = []
     sparqlQuery.value = ''
     sparqlAccordionOpen.value = false
+    rawResults.value = null
+    lastError.value = null
+
+    if (shouldUseLiveApi) {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/nl2sparql`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nl_query: searchQuery,
+            options: { expose_sparql: true }
+          })
+        })
+
+        const payload = await response.json()
+        if (!response.ok || payload.error) {
+          const message = payload.error?.message || 'Backend error'
+          throw new Error(message)
+        }
+
+        sparqlQuery.value = payload.sparql || ''
+        rawResults.value = payload.results || null
+
+        // Keep mock cards until real mapping is implemented
+        results.value = mockResults
+        isLoading.value = false
+        return
+      } catch (error) {
+        lastError.value = error?.message || 'Failed to reach backend'
+      }
+    }
 
     // Simulate network latency (1.2 seconds)
     await new Promise((resolve) => setTimeout(resolve, 1200))
@@ -88,6 +129,8 @@ export const useSearchStore = defineStore('search', () => {
     isLoading,
     results,
     sparqlQuery,
+    rawResults,
+    lastError,
     sparqlAccordionOpen,
     hasSearched,
     // Computed
