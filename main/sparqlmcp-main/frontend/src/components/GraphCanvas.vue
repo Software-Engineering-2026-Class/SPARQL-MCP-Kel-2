@@ -76,13 +76,107 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
 import { Network, DataSet } from 'vis-network/standalone'
 import { mockGraphNodes, mockGraphEdges } from '@/data/mockData.js'
 
 // ── Refs ─────────────────────────────────────────────────────
 const graphContainer = ref(null)
 let network = null
+
+const props = defineProps({
+  entities: {
+    type: Array,
+    default: () => []
+  },
+  graph: {
+    type: Object,
+    default: null
+  }
+})
+
+function normalizeGroup(type) {
+  const value = String(type || '').toLowerCase()
+  if (
+    value.includes('vuln') ||
+    value.includes('cve') ||
+    value.includes('cwe') ||
+    value.includes('cvss') ||
+    value.includes('reference')
+  ) return 'vulnerability'
+  if (value.includes('malware') || value.includes('threat') || value.includes('family')) return 'malware'
+  if (value.includes('cpe') || value.includes('product') || value.includes('vendor')) return 'target'
+  return 'target'
+}
+
+function buildLiveGraph(entities) {
+  if (!entities.length) {
+    return { nodes: mockGraphNodes, edges: mockGraphEdges }
+  }
+
+  const root = {
+    id: 'search-root',
+    label: entities[0]?.displayLabel || entities[0]?.title || 'Search Results',
+    group: normalizeGroup(entities[0]?.group || entities[0]?.type || entities[0]?.kind || entities[0]?.subtitle),
+    size: 30
+  }
+
+  const nodes = [root]
+  const edges = []
+  const seen = new Set([root.id])
+
+  entities.slice(0, 8).forEach((entity, index) => {
+    const nodeId = entity.uri || entity.id || `entity-${index}`
+    if (!seen.has(nodeId)) {
+      seen.add(nodeId)
+      nodes.push({
+        id: nodeId,
+        label: entity.displayLabel || entity.title || `Entity ${index + 1}`,
+        group: normalizeGroup(entity.group || entity.type || entity.kind || entity.subtitle),
+        size: index === 0 ? 24 : 20
+      })
+    }
+
+    edges.push({
+      from: root.id,
+      to: nodeId,
+      label: entity.subtitle || entity.type || 'result',
+      arrows: 'to'
+    })
+
+    entity.tags?.slice(0, 2).forEach((tag, tagIndex) => {
+      const tagId = `${nodeId}-tag-${tagIndex}-${tag}`
+      if (!seen.has(tagId)) {
+        seen.add(tagId)
+        nodes.push({
+          id: tagId,
+          label: tag,
+          group: 'target',
+          size: 16
+        })
+      }
+      edges.push({
+        from: nodeId,
+        to: tagId,
+        label: 'tag',
+        arrows: 'to'
+      })
+    })
+  })
+
+  return { nodes, edges }
+}
+
+const graphData = computed(() => buildLiveGraph(props.entities))
+
+const liveGraphData = computed(() => {
+  if (props.graph && Array.isArray(props.graph.nodes) && Array.isArray(props.graph.edges)) {
+    return props.graph
+  }
+  return graphData.value
+})
+
+const useSpiralLayout = computed(() => Boolean(liveGraphData.value.nodes.length > 0))
 
 // ── Legend Data ───────────────────────────────────────────────
 const legend = [
@@ -170,18 +264,7 @@ const networkOptions = {
     length: 180,
   },
   physics: {
-    enabled: true,
-    barnesHut: {
-      gravitationalConstant: -5000,
-      centralGravity:        0.1,
-      springLength:          180,
-      springConstant:        0.04,
-      damping:               0.3,
-    },
-    stabilization: {
-      iterations: 200,
-      updateInterval: 25,
-    },
+    enabled: false,
   },
   interaction: {
     hover:         true,
@@ -202,27 +285,17 @@ const networkOptions = {
 // ── Lifecycle ─────────────────────────────────────────────────
 onMounted(async () => {
   await nextTick()
-
-  if (!graphContainer.value) return
-
-  // Build vis DataSets
-  const nodes = new DataSet(
-    mockGraphNodes.map(n => ({
-      ...n,
-      group: n.group,
-    }))
-  )
-
-  const edges = new DataSet(mockGraphEdges)
-
-  // Initialise network
-  network = new Network(graphContainer.value, { nodes, edges }, networkOptions)
-
-  // After stabilisation, disable physics for free drag
-  network.once('stabilizationIterationsDone', () => {
-    network.setOptions({ physics: { enabled: false } })
-  })
+  renderGraph()
 })
+
+watch(
+  () => [props.entities, props.graph],
+  async () => {
+    await nextTick()
+    renderGraph()
+  },
+  { deep: true }
+)
 
 onUnmounted(() => {
   if (network) {
@@ -230,6 +303,51 @@ onUnmounted(() => {
     network = null
   }
 })
+
+function renderGraph() {
+  if (!graphContainer.value) return
+
+  if (network) {
+    network.destroy()
+    network = null
+  }
+
+  const spiralNodes = liveGraphData.value.nodes.map((node, index) => {
+    const angle = index * 2.399963229728653
+    const radius = 70 + index * 42
+    const x = Math.cos(angle) * radius
+    const y = Math.sin(angle) * radius
+
+    return {
+      ...node,
+      group: node.group,
+      x,
+      y,
+      fixed: { x: false, y: false },
+    }
+  })
+
+  const nodes = new DataSet(spiralNodes)
+
+  const edges = new DataSet(liveGraphData.value.edges)
+
+  const options = {
+    ...networkOptions,
+    layout: {
+      ...networkOptions.layout,
+      improvedLayout: false,
+    },
+    physics: {
+      enabled: false,
+    },
+  }
+
+  network = new Network(graphContainer.value, { nodes, edges }, options)
+
+  if (useSpiralLayout.value) {
+    network.fit({ animation: { duration: 0 } })
+  }
+}
 
 // ── Graph Controls ─────────────────────────────────────────────
 function zoomIn()  { network?.moveTo({ scale: network.getScale() * 1.25 }) }

@@ -7,6 +7,7 @@ import os
 import re
 import uuid
 from pathlib import Path
+from urllib.parse import unquote
 from typing import Any
 
 import requests
@@ -142,6 +143,400 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
     )
 
 
+def _extract_search_terms(nl_query: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", nl_query.lower())
+    stopwords = {
+        "all", "the", "and", "for", "with", "from", "about", "show", "list", "find",
+        "what", "which", "that", "this", "these", "those", "into", "related", "relation",
+        "relations", "relationship", "relationships", "between", "entities", "entity", "records", "record", "data", "database", "any",
+    }
+    terms: list[str] = []
+    for token in tokens:
+        if token in stopwords:
+            continue
+        normalized = token
+        if token.endswith("ies") and len(token) > 4:
+            normalized = token[:-3] + "y"
+        elif token.endswith("es") and len(token) > 4:
+            normalized = token[:-2]
+        elif token.endswith("s") and len(token) > 3:
+            normalized = token[:-1]
+        for candidate in (token, normalized):
+            if candidate not in terms:
+                terms.append(candidate)
+    return terms[:3]
+
+
+def _build_fallback_query(nl_query: str) -> str:
+    query_text = nl_query.lower()
+
+    wants_malware = any(keyword in query_text for keyword in ("malware", "emotet", "botnet", "threat", "family"))
+    wants_vulnerability = "cve" in query_text or "vulnerabil" in query_text or "json" in query_text
+    wants_target = any(keyword in query_text for keyword in ("cpe", "product", "vendor", "target"))
+
+    if wants_malware and wants_vulnerability and wants_target:
+        terms = _extract_search_terms(nl_query)
+        if not terms:
+            terms = [query_text]
+        escaped_terms = [term.replace('"', '\\"') for term in terms[:4]]
+        filters = " || ".join(
+            f'CONTAINS(LCASE(STR(COALESCE(?label, ?description, ?vendor, ?product, ""))), "{term}")'
+            for term in escaped_terms
+        )
+        if not filters:
+            filters = 'true'
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX cve: <http://w3id.org/sepses/vocab/ref/cve#>\n"
+            "PREFIX cpe: <http://w3id.org/sepses/vocab/ref/cpe#>\n"
+            "PREFIX cwe: <http://w3id.org/sepses/vocab/ref/cwe#>\n"
+            "PREFIX malware: <http://w3id.org/sepses/vocab/ref/malware#>\n"
+            "SELECT DISTINCT ?entity ?label ?type ?description ?firstSeen ?vendor ?product WHERE {\n"
+            "  {\n"
+            "    ?entity a malware:MalwareFamily ;\n"
+            "            rdfs:label ?label .\n"
+            "    OPTIONAL { ?entity malware:firstSeen ?firstSeen }\n"
+            "    OPTIONAL { ?entity dcterms:description ?description }\n"
+            "    BIND('malware' AS ?type)\n"
+            "  } UNION {\n"
+            "    ?entity a cve:CVE ;\n"
+            "            rdfs:label ?label .\n"
+            "    OPTIONAL { ?entity dcterms:description ?description }\n"
+            "    BIND('vulnerability' AS ?type)\n"
+            "  } UNION {\n"
+            "    ?entity a cpe:CPE ;\n"
+            "            rdfs:label ?label .\n"
+            "    OPTIONAL { ?entity cpe:hasVendor ?vendor }\n"
+            "    OPTIONAL { ?entity cpe:hasProduct ?product }\n"
+            "    OPTIONAL { ?entity dcterms:description ?description }\n"
+            "    BIND('target' AS ?type)\n"
+            "  }\n"
+            f"  FILTER({filters})\n"
+            "}\n"
+            "LIMIT 100"
+        )
+
+    if "cve" in query_text or "vulnerabil" in query_text:
+        # If the NL query contains additional terms (e.g. "frontend", "wordpress"),
+        # prefer a filtered CVE query that searches labels/descriptions for those terms.
+        terms = _extract_search_terms(nl_query)
+        escaped_terms = [term.replace('"', '\\"') for term in terms[:4]] if terms else []
+        filter_clause = ""
+        if escaped_terms:
+            filters = " || ".join(
+                f'CONTAINS(LCASE(STR(COALESCE(?label, ?description, ""))), "{term}")'
+                for term in escaped_terms
+            )
+            filter_clause = f"  FILTER({filters})\n"
+
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX cve: <http://w3id.org/sepses/vocab/ref/cve#>\n"
+            "PREFIX cwe: <http://w3id.org/sepses/vocab/ref/cwe#>\n"
+            "PREFIX cvss: <http://w3id.org/sepses/vocab/ref/cvss#>\n"
+            "SELECT DISTINCT ?s ?label ?description ?issued ?modified WHERE {\n"
+            "  ?s a cve:CVE .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s dcterms:description ?description }\n"
+            "  OPTIONAL { ?s dcterms:issued ?issued }\n"
+            "  OPTIONAL { ?s dcterms:modified ?modified }\n"
+            f"{filter_clause}"
+            "}\n"
+            "LIMIT 100"
+        )
+
+    if "cwe" in query_text or "weakness" in query_text:
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX cwe: <http://w3id.org/sepses/vocab/ref/cwe#>\n"
+            "SELECT DISTINCT ?s ?label ?description WHERE {\n"
+            "  ?s a cwe:CWE .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s dcterms:description ?description }\n"
+            "}\n"
+            "LIMIT 100"
+        )
+
+    if "cpe" in query_text or "product" in query_text or "vendor" in query_text:
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX cpe: <http://w3id.org/sepses/vocab/ref/cpe#>\n"
+            "SELECT DISTINCT ?s ?label ?title ?vendor ?product ?version WHERE {\n"
+            "  ?s a cpe:CPE .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s cpe:title ?title }\n"
+            "  OPTIONAL { ?s cpe:hasVendor ?vendor }\n"
+            "  OPTIONAL { ?s cpe:hasProduct ?product }\n"
+            "  OPTIONAL { ?s cpe:version ?version }\n"
+            "}\n"
+            "LIMIT 100"
+        )
+
+    terms = _extract_search_terms(nl_query)
+    if not terms:
+        terms = [nl_query.strip().lower()]
+    escaped_terms = [term.replace('"', '\\"') for term in terms[:4]]
+    filter_clause = " || ".join(
+        f'CONTAINS(LCASE(STR(?s)), "{term}") || CONTAINS(LCASE(COALESCE(STR(?label), "")), "{term}")'
+        for term in escaped_terms
+    )
+
+    return (
+        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+        "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\n"
+        "SELECT DISTINCT ?s ?label WHERE {\n"
+        "  OPTIONAL { ?s rdfs:label ?rdfsLabel }\n"
+        "  OPTIONAL { ?s skos:prefLabel ?prefLabel }\n"
+        "  OPTIONAL { ?s skos:altLabel ?altLabel }\n"
+        "  BIND(COALESCE(?rdfsLabel, ?prefLabel, ?altLabel) AS ?label)\n"
+        f"  FILTER({filter_clause})\n"
+        "}\n"
+        "LIMIT 100"
+    )
+
+
+def _query_looks_too_generic(nl_query: str, query: str) -> bool:
+    query_text = query.lower()
+    if not query_text.strip():
+        return True
+
+    terms = _extract_search_terms(nl_query)
+    content_terms = [
+        term for term in terms
+        if term not in {"cve", "cwe", "cpe", "malware", "vulnerability", "vulnerabilities", "product", "target", "relation", "related"}
+    ]
+    if content_terms and any(term in query_text for term in content_terms):
+        return False
+
+    if re.search(r"\?s\s+a\s+cve:cve\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    if re.search(r"\?s\s+a\s+cpe:cpe\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    if re.search(r"\?s\s+a\s+cwe:cwe\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    return False
+
+
+def _short_resource_label(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).replace("<", "").replace(">", "")
+    text = text.replace("http://", "").replace("https://", "")
+    tail = re.split(r"[\/#+]", text)[-1]
+    return _decode_uri_component(tail)
+
+
+def _decode_uri_component(value: str) -> str:
+    try:
+        return unquote(value)
+    except Exception:
+        return value
+
+
+def _classify_resource(value: str | None) -> str:
+    text = (value or "").lower()
+    if (
+        "cve" in text
+        or "vulnerab" in text
+        or "cwe" in text
+        or "cvss" in text
+        or "reference" in text
+        or "/cve/" in text
+        or "/cwe/" in text
+    ):
+        return "vulnerability"
+    if "cpe" in text or "vendor" in text or "product" in text:
+        return "target"
+    if "malware" in text or "family" in text or "threat" in text:
+        return "malware"
+    return "target"
+
+
+def _pick_binding_iri(binding: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = binding.get(key, {}).get("value")
+        if value and str(value).startswith("http"):
+            return str(value)
+    return None
+
+
+def _pick_any_binding_iri(binding: dict[str, Any]) -> str | None:
+    for cell in binding.values():
+        value = cell.get("value")
+        if value and str(value).startswith("http"):
+            return str(value)
+    return None
+
+
+def _normalize_relation_seed_uri(uri: str | None) -> str | None:
+    if not uri:
+        return None
+
+    text = str(uri)
+    match = re.match(r"^https?://w3id\.org/sepses/vocab/ref/([^#]+)#(.+)$", text)
+    if not match:
+        return text
+
+    namespace = match.group(1)
+    identifier = match.group(2)
+    return f"http://w3id.org/sepses/resource/{namespace}/{identifier}"
+
+
+def _is_relevant_relation(predicate: str | None) -> bool:
+    return predicate != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+
+
+def _build_relation_graph_node(uri: str, *, label: str | None = None) -> dict[str, Any]:
+    return {
+        "id": uri,
+        "label": label or _short_resource_label(uri),
+        "group": _classify_resource(uri),
+        "title": uri,
+    }
+
+
+def _build_relation_graph_rows(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    bindings = payload.get("results", {}).get("bindings", [])
+    return bindings if isinstance(bindings, list) else []
+
+
+def _build_extractive_summary(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Build a short extractive summary from the top descriptions in SPARQL results.
+
+    This is intentionally extractive (no LLM) and uses only data returned by the
+    SPARQL results to avoid hallucination.
+    """
+    if not payload:
+        return None
+    bindings = payload.get("results", {}).get("bindings", []) or []
+    descriptions: list[str] = []
+    for b in bindings:
+        # Common description fields used by queries
+        desc = (
+            b.get("description", {}) .get("value")
+            if isinstance(b.get("description", {}), dict)
+            else None
+        )
+        if not desc:
+            desc = b.get("dcterms:description", {}).get("value") if isinstance(b.get("dcterms:description", {}), dict) else None
+        if not desc:
+            # fallback: try label to give short context
+            desc = b.get("label", {}).get("value") if isinstance(b.get("label", {}), dict) else None
+        if not desc:
+            continue
+        first_sentence = re.split(r"(?<=[.!?])\s+", str(desc).strip())[0]
+        if first_sentence:
+            descriptions.append(first_sentence)
+        if len(descriptions) >= 3:
+            break
+
+    if not descriptions:
+        return None
+
+    summary_text = " — ".join(descriptions)
+    return {"text": summary_text, "source_count": len(descriptions)}
+
+
+async def _fetch_relation_graph(endpoint: str, payload: dict[str, Any] | None, *, timeout_ms: int) -> dict[str, Any]:
+    bindings = _build_relation_graph_rows(payload)
+    seed_uris: list[str] = []
+    for binding in bindings[:4]:
+        seed = _pick_binding_iri(binding, ("s", "entity", "subject", "resource", "uri", "id"))
+        if not seed:
+            seed = _pick_any_binding_iri(binding)
+        seed = _normalize_relation_seed_uri(seed)
+        if seed and seed not in seed_uris:
+            seed_uris.append(seed)
+
+    if not seed_uris:
+        return {"nodes": [], "edges": []}
+
+    iri_values = " ".join(f"<{uri}>" for uri in seed_uris)
+    graph_queries = [
+        (
+            "outgoing",
+            f"""
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel WHERE {{
+  VALUES ?s {{ {iri_values} }}
+  ?s ?p ?o .
+  FILTER(isIRI(?o))
+  OPTIONAL {{ ?s rdfs:label ?sLabel }}
+  OPTIONAL {{ ?o rdfs:label ?oLabel }}
+}}
+LIMIT 40
+""".strip(),
+        ),
+        (
+            "incoming",
+            f"""
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel WHERE {{
+  VALUES ?o {{ {iri_values} }}
+  ?s ?p ?o .
+  FILTER(isIRI(?s))
+  OPTIONAL {{ ?s rdfs:label ?sLabel }}
+  OPTIONAL {{ ?o rdfs:label ?oLabel }}
+}}
+LIMIT 40
+""".strip(),
+        ),
+    ]
+
+    node_map: dict[str, dict[str, Any]] = {}
+    edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    for _, graph_query in graph_queries:
+        graph_result = await execute_sparql(
+            endpoint=endpoint,
+            query=graph_query,
+            format="sparql-results+json",
+            timeout_ms=timeout_ms,
+        )
+        try:
+            graph_payload = json.loads(graph_result.payload_text)
+        except json.JSONDecodeError:
+            continue
+
+        for row in graph_payload.get("results", {}).get("bindings", []):
+            subject = _pick_binding_iri(row, ("s",))
+            obj = _pick_binding_iri(row, ("o",))
+            predicate = _pick_binding_iri(row, ("p",))
+            if not subject or not obj or not predicate:
+                continue
+            if not _is_relevant_relation(predicate):
+                continue
+
+            subject_label = row.get("sLabel", {}).get("value") or None
+            object_label = row.get("oLabel", {}).get("value") or None
+
+            if subject not in node_map:
+                node_map[subject] = _build_relation_graph_node(subject, label=subject_label)
+            if obj not in node_map:
+                node_map[obj] = _build_relation_graph_node(obj, label=object_label)
+
+            edge_key = (subject, predicate, obj)
+            if edge_key not in edge_map:
+                edge_map[edge_key] = {
+                    "from": subject,
+                    "to": obj,
+                    "label": _short_resource_label(predicate),
+                    "arrows": "to",
+                    "title": predicate,
+                }
+
+    return {
+        "nodes": list(node_map.values()),
+        "edges": list(edge_map.values()),
+    }
+
+
 def _call_claude(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
@@ -188,18 +583,18 @@ def _call_claude(nl_query: str, *, retry: bool, previous_query: str | None) -> d
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-def _call_openai_compat(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
-    api_key = os.environ.get("OPENAI_COMPAT_API_KEY", "").strip()
+def _call_openrouter(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_COMPAT_API_KEY is not set.")
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY is not set.")
 
-    base_url = os.environ.get("OPENAI_COMPAT_BASE_URL", "").strip()
-    if not base_url:
-        raise HTTPException(status_code=500, detail="OPENAI_COMPAT_BASE_URL is not set.")
+    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
 
-    model = os.environ.get("OPENAI_COMPAT_MODEL", "smart-chat")
-    max_tokens = int(os.environ.get("OPENAI_COMPAT_MAX_TOKENS", "800"))
-    temperature = float(os.environ.get("OPENAI_COMPAT_TEMPERATURE", "0.2"))
+    model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    max_tokens = int(os.environ.get("OPENROUTER_MAX_TOKENS", "800"))
+    temperature = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.2"))
+    http_referer = os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost:5173").strip()
+    app_title = os.environ.get("OPENROUTER_APP_TITLE", "SPARQL-MCP Kelompok 2").strip()
 
     prompt = _build_llm_prompt(nl_query, retry=retry, previous_query=previous_query)
     payload = {
@@ -211,6 +606,8 @@ def _call_openai_compat(nl_query: str, *, retry: bool, previous_query: str | Non
 
     headers = {
         "authorization": f"Bearer {api_key}",
+        "http-referer": http_referer,
+        "x-title": app_title,
         "content-type": "application/json",
     }
 
@@ -219,18 +616,19 @@ def _call_openai_compat(nl_query: str, *, retry: bool, previous_query: str | Non
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"LLM API error: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"OpenRouter API error: {exc}") from exc
 
     data = response.json()
     choices = data.get("choices", [])
     if not choices:
-        raise HTTPException(status_code=502, detail="LLM API returned empty choices.")
+        raise HTTPException(status_code=502, detail="OpenRouter API returned empty choices.")
+
     message = choices[0].get("message", {})
     combined = message.get("content", "")
     if not combined:
         combined = choices[0].get("text", "")
     if not combined:
-        raise HTTPException(status_code=502, detail="LLM API returned empty content.")
+        raise HTTPException(status_code=502, detail="OpenRouter API returned empty content.")
 
     try:
         return _extract_json(combined)
@@ -239,11 +637,11 @@ def _call_openai_compat(nl_query: str, *, retry: bool, previous_query: str | Non
 
 
 def _call_llm(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
-    provider = os.environ.get("LLM_PROVIDER", "claude").strip().lower()
+    provider = os.environ.get("LLM_PROVIDER", "openrouter").strip().lower()
     if provider in {"claude", "anthropic"}:
         return _call_claude(nl_query, retry=retry, previous_query=previous_query)
-    if provider in {"openai_compat", "openai-compatible", "router", "multi"}:
-        return _call_openai_compat(nl_query, retry=retry, previous_query=previous_query)
+    if provider in {"openrouter", "openrouter.ai", "openrouter-ai", "openai_compat", "openai-compatible", "router", "multi"}:
+        return _call_openrouter(nl_query, retry=retry, previous_query=previous_query)
     raise HTTPException(status_code=500, detail=f"Unsupported LLM_PROVIDER: {provider}")
 
 
@@ -336,6 +734,9 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
     if not query:
         raise HTTPException(status_code=502, detail="LLM response did not include a query.")
 
+    if _query_looks_too_generic(request.nl_query, query):
+        query = _build_fallback_query(request.nl_query)
+
     _reject_unsafe_query(query)
     _validate_query_size(query)
     _validate_endpoints(query)
@@ -359,33 +760,36 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
             payload = None
 
     if options.refine_on_empty and _is_empty_results(payload):
-        retry = _call_llm(request.nl_query, retry=True, previous_query=query)
-        retry_query = str(retry.get("query", "")).strip()
-        if retry_query:
-            _reject_unsafe_query(retry_query)
-            _validate_query_size(retry_query)
-            _validate_endpoints(retry_query)
-            retry_query = _ensure_limit(retry_query, limit_default)
-            retry_endpoint = _route_endpoint(retry_query)
-            retry_result = await execute_sparql(
-                endpoint=retry_endpoint,
-                query=retry_query,
-                format=options.format,
-                timeout_ms=options.timeout_ms,
-            )
-            query = retry_query
-            endpoint = retry_endpoint
-            result = retry_result
-            if options.format == "sparql-results+json":
-                try:
-                    payload = json.loads(result.payload_text)
-                except json.JSONDecodeError:
-                    payload = None
+        fallback_query = _build_fallback_query(request.nl_query)
+        _reject_unsafe_query(fallback_query)
+        _validate_query_size(fallback_query)
+        _validate_endpoints(fallback_query)
+        fallback_query = _ensure_limit(fallback_query, limit_default)
+        fallback_endpoint = _route_endpoint(fallback_query)
+        fallback_result = await execute_sparql(
+            endpoint=fallback_endpoint,
+            query=fallback_query,
+            format=options.format,
+            timeout_ms=options.timeout_ms,
+        )
+        query = fallback_query
+        endpoint = fallback_endpoint
+        result = fallback_result
+        if options.format == "sparql-results+json":
+            try:
+                payload = json.loads(result.payload_text)
+            except json.JSONDecodeError:
+                payload = None
+
+    graph = await _fetch_relation_graph(endpoint, payload, timeout_ms=options.timeout_ms)
+    summary = _build_extractive_summary(payload)
 
     response_body = {
         "trace_id": trace_id,
         "preview": result.preview,
         "results": payload or result.payload_text,
+        "graph": graph,
+        "summary": summary,
         "meta": {
             "endpoint": endpoint,
             "elapsed_ms": _parse_elapsed_ms(result.preview),

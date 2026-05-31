@@ -37,7 +37,6 @@
       autocorrect="off"
       spellcheck="false"
       aria-label="Search query"
-      @keydown.enter.prevent="handleSubmit"
     />
 
     <!-- Submit button (right) -->

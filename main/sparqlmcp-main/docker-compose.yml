@@ -12,7 +12,7 @@ services:
       DEFAULT_SPARQL_ENDPOINT: "http://fuseki:3030/cskg/sparql"
       FEDERATION_ENDPOINT: "http://fuseki:3030/cskg/sparql"
       FORCE_FEDERATION: "false"
-      CORS_ALLOW_ORIGINS: "http://localhost:5173"
+      CORS_ALLOW_ORIGINS: "${CORS_ALLOW_ORIGINS}"
     depends_on:
       - fuseki
     restart: unless-stopped
@@ -30,3 +30,4 @@ services:
 
 volumes:
   fuseki-data:
+                      

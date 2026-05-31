@@ -52,6 +52,7 @@
         v-for="field in simpleFields"
         :key="field.label"
         class="card-field"
+        :class="{ 'card-field--wide': field.wide }"
       >
         <dt class="field-label">{{ field.label }}</dt>
         <dd class="field-value">{{ field.value }}</dd>
@@ -216,6 +217,10 @@ const cvssColorClass = computed(() => {
   margin-bottom: 0.75rem;
 }
 
+.card-field--wide {
+  grid-column: 1 / -1;
+}
+
 .card-field {
   display: flex;
   flex-direction: column;
@@ -235,6 +240,9 @@ const cvssColorClass = computed(() => {
   font-size: 0.875rem;
   color: #cbd5e1;
   margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Description block */
@@ -248,6 +256,8 @@ const cvssColorClass = computed(() => {
   line-height: 1.6;
   margin: 0;
   margin-top: 0.35rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Tags block */

@@ -39,6 +39,10 @@
         <div v-if="!store.isLoading && store.hasResults" class="results-grid">
           <!-- Left column: entity cards -->
           <section class="cards-column" aria-label="Search results">
+            <div v-if="store.summary" class="summary-card">
+              <div class="summary-header">Explanation</div>
+              <div class="summary-body">{{ store.summary }}</div>
+            </div>
             <TransitionGroup name="card-list" tag="div" class="cards-list">
               <EntityCard
                 v-for="entity in store.results"
@@ -50,7 +54,7 @@
 
           <!-- Right column: knowledge graph -->
           <section class="graph-column" aria-label="Knowledge graph">
-            <GraphCanvas />
+            <GraphCanvas :entities="store.results" :graph="store.graphData" />
           </section>
         </div>
       </Transition>
@@ -223,6 +227,26 @@ async function handleSearch(query) {
   color: #334155;
   margin: 0;
   text-align: center;
+}
+
+/* Summary card */
+.summary-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.03);
+  padding: 0.75rem;
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+.summary-header {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 0.5rem;
+}
+.summary-body {
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  line-height: 1.25;
 }
 
 /* ── Transition: fade-slide-up ────────────────────────────── */

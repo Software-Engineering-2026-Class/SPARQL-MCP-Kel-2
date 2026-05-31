@@ -39,12 +39,14 @@ Create a `.env` file in the root directory (or update the existing one). **Note:
 | `VOID_HTTP_TIMEOUT_SECONDS`| Timeout for fetching VoID via HTTP | `60` |
 | `VOID_SPARQL_TIMEOUT_SECONDS`| Timeout for fetching VoID via SPARQL | `60` |
 | `EXPOSED_TOOLS` | Comma-separated list of tools to expose to the client | `run_sparql_query,get_void_descriptions` |
-| `LLM_PROVIDER` | LLM backend | `openai_compat` |
-| `OPENAI_COMPAT_API_KEY` | OpenAI-compatible API key (if `LLM_PROVIDER=openai_compat`) | `` |
-| `OPENAI_COMPAT_BASE_URL` | Base URL for OpenAI-compatible router | `` |
-| `OPENAI_COMPAT_MODEL` | Router model name | `smart-chat` |
-| `OPENAI_COMPAT_MAX_TOKENS` | Max tokens for router responses | `800` |
-| `OPENAI_COMPAT_TEMPERATURE` | Router temperature setting | `0.2` |
+| `LLM_PROVIDER` | LLM backend | `openrouter` |
+| `OPENROUTER_API_KEY` | OpenRouter API key (if `LLM_PROVIDER=openrouter`) | `` |
+| `OPENROUTER_BASE_URL` | Base URL for OpenRouter's OpenAI-compatible API | `https://openrouter.ai/api/v1` |
+| `OPENROUTER_MODEL` | Model name | `google/gemini-2.0-flash-exp:free` |
+| `OPENROUTER_MAX_TOKENS` | Max tokens for router responses | `800` |
+| `OPENROUTER_TEMPERATURE` | Router temperature setting | `0.2` |
+| `OPENROUTER_HTTP_REFERER` | Optional HTTP Referer header for OpenRouter | `http://localhost:5173` |
+| `OPENROUTER_APP_TITLE` | Optional app title header for OpenRouter | `SPARQL-MCP Kelompok 2` |
 | `CORS_ALLOW_ORIGINS` | Comma-separated allowed origins for the API | `http://localhost:5173` |
 | `ALLOWED_ENDPOINTS` | Comma-separated SERVICE endpoint allowlist | `` |
 
@@ -195,7 +197,7 @@ At least one of `endpoint` or `endpoints` is required.
 
 ## Verify NL to SPARQL roundtrip
 
-This server executes SPARQL only. Natural language to SPARQL generation happens in your MCP client (Cursor, Claude, or another LLM-backed client).
+The stdio MCP server executes SPARQL only. Natural language to SPARQL generation happens in the backend API (`/api/nl2sparql`) or in your MCP client when you use an external LLM-backed workflow.
 
 1. Start the server: `sparql-mcp-stdio`.
 2. Open your MCP client and connect to the `sparql-mcp` server.
