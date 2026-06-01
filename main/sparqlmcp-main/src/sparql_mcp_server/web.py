@@ -120,11 +120,11 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
     prefix_block = (
         "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
         "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\n"
-        "PREFIX cve: <https://w3id.org/sepses/vocab/ref/cve#>\n"
-        "PREFIX cpe: <https://w3id.org/sepses/vocab/ref/cpe#>\n"
-        "PREFIX cwe: <https://w3id.org/sepses/vocab/ref/cwe#>\n"
-        "PREFIX capec: <https://w3id.org/sepses/vocab/ref/capec#>\n"
-        "PREFIX snort: <https://w3id.org/sepses/vocab/ref/snort#>\n"
+        "PREFIX cve: <http://w3id.org/sepses/vocab/ref/cve#>\n"
+        "PREFIX cpe: <http://w3id.org/sepses/vocab/ref/cpe#>\n"
+        "PREFIX cwe: <http://w3id.org/sepses/vocab/ref/cwe#>\n"
+        "PREFIX capec: <http://w3id.org/sepses/vocab/ref/capec#>\n"
+        "PREFIX snort: <http://w3id.org/sepses/vocab/ref/snort#>\n"
     )
     guidance = (
         "Return JSON only with keys: query, format, notes.\n"
