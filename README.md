@@ -14,8 +14,7 @@ Dokumentasi teknis lengkap tersedia di:
 
 - [`main/sparqlmcp-main/README.md`](main/sparqlmcp-main/README.md) — setup backend, konfigurasi `.env`, dan cara menjalankan server
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — arsitektur multi-agent dan protokol komunikasi antar agen
-- [`main/sparqlmcp-main/IMPLEMENTATION.md`](main/sparqlmcp-main/IMPLEMENTATION.md) — panduan implementasi backend API dan integrasi frontend
-- [`main/sparqlmcp-main/SPARQL_queries.md`](main/sparqlmcp-main/SPARQL_queries.md) — suite kueri uji keamanan SPARQL (15+ kueri)
+- [`DIAGRAMS.md`](DIAGRAMS.md) — diagram arsitektur sistem, alur multi-agent, integrasi SPARQL-MCP, dan interaksi frontend-backend
 
 ## Struktur Folder
 
