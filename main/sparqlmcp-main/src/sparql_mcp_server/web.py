@@ -826,6 +826,15 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root() -> dict:
+    return {
+        "message": "SPARQL-MCP Backend API is running",
+        "frontend_url": "http://localhost:5173",
+        "info": "Untuk melihat tampilan antarmuka (UI), silakan buka frontend_url di atas."
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
