@@ -21,7 +21,6 @@ Dokumentasi teknis lengkap tersedia di:
 ```
 .
 ├─ ARCHITECTURE.md
-├─ ISSUE_PLAN.md
 ├─ LICENSE
 ├─ README.md
 └─ main/
@@ -31,7 +30,6 @@ Dokumentasi teknis lengkap tersedia di:
       ├─ .gitignore
       ├─ Dockerfile
       ├─ docker-compose.yml      ← menjalankan backend + Fuseki sekaligus
-      ├─ IMPLEMENTATION.md
       ├─ pyproject.toml
       ├─ README.md
       ├─ requirements.txt

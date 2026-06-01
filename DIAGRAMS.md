@@ -261,9 +261,9 @@ flowchart TD
     START(["Query NL masuk"])
 
     LLM_CALL["Panggil LLM\n_call_openrouter"]
-    LLM_OK{LLM berhasil?}
-    QUERY_VALID{Query mengandung\nkata umum\n(tell/list/show)?}
-    GENERIC{Query terlalu\ngenerik?\n_query_looks_too_generic}
+    LLM_OK{"LLM berhasil?"}
+    QUERY_VALID{"Query mengandung\nkata umum?\ntell / list / show"}
+    GENERIC{"Query terlalu\ngenerik?\n_query_looks_too_generic"}
 
     FALLBACK_BUILD["Bangun fallback query\n_build_fallback_query"]
 
@@ -273,15 +273,15 @@ flowchart TD
         F_CPE["CPE / product / vendor\n→ SELECT CPE query"]
         F_CAPEC["CAPEC / attack pattern\n→ SELECT CAPEC query"]
         F_SNORT["snort / rule / signature\n→ SELECT SnortRule query"]
-        F_MALWARE["malware+cve+cpe\n→ UNION multi-type query"]
+        F_MALWARE["malware + cve + cpe\n→ UNION multi-type query"]
         F_GENERIC["Generic\n→ CONTAINS label filter"]
     end
 
     EXEC["Eksekusi SPARQL\nexecute_sparql"]
-    EXEC_OK{Eksekusi berhasil?}
-    SAFE_RETRY["Retry dengan\nsafe CVE query\n(filter fallback_term)"]
+    EXEC_OK{"Eksekusi berhasil?"}
+    SAFE_RETRY["Retry dengan\nsafe CVE query\nfilter fallback_term"]
 
-    EMPTY{Hasil kosong?\n_is_empty_results}
+    EMPTY{"Hasil kosong?\n_is_empty_results"}
     REFINE["Jalankan fallback query\nuntuk refinement"]
 
     FINAL(["Kembalikan hasil\nke Reasoning Agent"])
@@ -290,8 +290,8 @@ flowchart TD
     LLM_CALL --> LLM_OK
     LLM_OK -->|"Tidak"| FALLBACK_BUILD
     LLM_OK -->|"Ya"| QUERY_VALID
-    QUERY_VALID -->|"Ya (tidak valid)"| FALLBACK_BUILD
-    QUERY_VALID -->|"Tidak (valid)"| GENERIC
+    QUERY_VALID -->|"Ya - tidak valid"| FALLBACK_BUILD
+    QUERY_VALID -->|"Tidak - valid"| GENERIC
     GENERIC -->|"Ya"| FALLBACK_BUILD
     GENERIC -->|"Tidak"| EXEC
 
