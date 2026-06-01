@@ -54,7 +54,7 @@
     </div>
 
     <!-- Graph canvas container -->
-    <div ref="graphContainer" class="graph-canvas" aria-label="Interactive knowledge graph" />
+    <div ref="graphContainer" class="graph-canvas" aria-label="Interactive knowledge graph"></div>
 
     <!-- Legend -->
     <div class="graph-legend" role="list" aria-label="Graph node legend">
@@ -170,9 +170,17 @@ function buildLiveGraph(entities) {
 const graphData = computed(() => buildLiveGraph(props.entities))
 
 const liveGraphData = computed(() => {
-  if (props.graph && Array.isArray(props.graph.nodes) && Array.isArray(props.graph.edges)) {
+  // Prefer a backend-provided graph only when it has proper nodes/edges arrays.
+  if (
+    props.graph &&
+    props.graph.nodes &&
+    props.graph.edges &&
+    Array.isArray(props.graph.nodes) &&
+    Array.isArray(props.graph.edges)
+  ) {
     return props.graph
   }
+  // Otherwise fall back to the entity-derived graph
   return graphData.value
 })
 
@@ -312,24 +320,208 @@ function renderGraph() {
     network = null
   }
 
-  const spiralNodes = liveGraphData.value.nodes.map((node, index) => {
+  // Normalize nodes/edges: backend may send arrays, objects, or proxy-like values — coerce to safe arrays.
+  const rawNodes = (liveGraphData.value && liveGraphData.value.nodes) || []
+  const rawEdges = (liveGraphData.value && liveGraphData.value.edges) || []
+
+  let nodesList
+  let edgesList
+  try {
+    if (Array.isArray(rawNodes)) nodesList = rawNodes
+    else if (rawNodes && typeof rawNodes === 'object' && typeof rawNodes.length === 'number') nodesList = Array.from(rawNodes)
+    else if (rawNodes && typeof rawNodes === 'object') nodesList = Object.values(rawNodes)
+    else nodesList = []
+
+    if (Array.isArray(rawEdges)) edgesList = rawEdges
+    else if (rawEdges && typeof rawEdges === 'object' && typeof rawEdges.length === 'number') edgesList = Array.from(rawEdges)
+    else if (rawEdges && typeof rawEdges === 'object') edgesList = Object.values(rawEdges)
+    else edgesList = []
+  } catch (e) {
+    console.warn('GraphCanvas: failed to normalize raw graph shapes, falling back to empty arrays', { rawNodes, rawEdges, err: e })
+    nodesList = []
+    edgesList = []
+  }
+
+  // Build spiral positions from normalized nodes list using a defensive loop (avoid relying on .map)
+  const spiralNodes = []
+  for (let index = 0; index < (nodesList && nodesList.length ? nodesList.length : 0); index++) {
+    const node = nodesList[index] || {}
     const angle = index * 2.399963229728653
     const radius = 70 + index * 42
     const x = Math.cos(angle) * radius
     const y = Math.sin(angle) * radius
 
-    return {
-      ...node,
-      group: node.group,
+    spiralNodes.push({
+      ...(typeof node === 'object' ? node : {}),
+      group: node?.group,
       x,
       y,
       fixed: { x: false, y: false },
+    })
+  }
+  // Simple collision-avoidance to reduce node overlap while keeping spiral order.
+  // This nudges nodes apart if they are closer than `minDist` for a few iterations.
+  // Lightweight collision-avoidance: reduce overlap but keep nodes near spiral.
+  // Lowered minDist and fewer iterations to avoid excessive displacement.
+  (function resolveCollisions(nodesArray) {
+    const minDist = 40 // minimum distance between node centers (reduced)
+    const iterations = 2 // fewer passes to avoid pushing nodes off-screen
+    for (let it = 0; it < iterations; it++) {
+      for (let i = 0; i < nodesArray.length; i++) {
+        for (let j = i + 1; j < nodesArray.length; j++) {
+          const a = nodesArray[i]
+          const b = nodesArray[j]
+          const dx = b.x - a.x
+          const dy = b.y - a.y
+          let dist = Math.sqrt(dx * dx + dy * dy) || 0.0001
+          if (dist < minDist) {
+            const overlap = (minDist - dist) / 2
+            const nx = dx / dist
+            const ny = dy / dist
+            a.x -= nx * overlap * 0.6
+            a.y -= ny * overlap * 0.6
+            b.x += nx * overlap * 0.6
+            b.y += ny * overlap * 0.6
+          }
+        }
+      }
     }
-  })
+  })(spiralNodes)
 
-  const nodes = new DataSet(spiralNodes)
+  // Detect connected components so we can separate them spatially and avoid overlapping
+  // Build adjacency map from edgesList (defensive: edges may be objects with from/to)
+  const adjacency = {}
+  try {
+    for (let i = 0; i < edgesList.length; i++) {
+      const e = edgesList[i] || {}
+      const a = e.from || e.source || e.f || null
+      const b = e.to   || e.target || e.t || null
+      if (!a || !b) continue
+      if (!adjacency[a]) adjacency[a] = new Set()
+      if (!adjacency[b]) adjacency[b] = new Set()
+      adjacency[a].add(b)
+      adjacency[b].add(a)
+    }
+  } catch (e) {
+    console.warn('GraphCanvas: adjacency build failed', e)
+  }
 
-  const edges = new DataSet(liveGraphData.value.edges)
+  // BFS to enumerate components
+  const visited = new Set()
+  const components = []
+  for (let i = 0; i < spiralNodes.length; i++) {
+    const nid = spiralNodes[i].id
+    if (!nid || visited.has(nid)) continue
+    const comp = []
+    const queue = [nid]
+    visited.add(nid)
+    while (queue.length) {
+      const cur = queue.shift()
+      comp.push(cur)
+      const neighbors = adjacency[cur]
+      if (neighbors) {
+        for (const nb of neighbors) {
+          if (!visited.has(nb)) {
+            visited.add(nb)
+            queue.push(nb)
+          }
+        }
+      }
+    }
+    components.push(comp)
+  }
+
+  // Place each component spatially so they don't overlap by computing per-component
+  // bounding radius and laying out component centers on a circle with enough separation.
+  if (components.length > 1) {
+    // map node id -> node object for quick lookup
+    const nodeById = {}
+    for (const n of spiralNodes) nodeById[n.id] = n
+
+    // compute per-component centroid and radius (max distance from centroid)
+    const compMeta = components.map((comp) => {
+      const nodes = comp.map((id) => nodeById[id]).filter(Boolean)
+      if (!nodes.length) return { nodes: [], cx: 0, cy: 0, r: 0 }
+      const cx = nodes.reduce((s, p) => s + (p.x || 0), 0) / nodes.length
+      const cy = nodes.reduce((s, p) => s + (p.y || 0), 0) / nodes.length
+      let r = 0
+      for (const p of nodes) {
+        const dx = (p.x || 0) - cx
+        const dy = (p.y || 0) - cy
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d > r) r = d
+      }
+      // add padding so edges and labels don't collide
+      return { nodes, cx, cy, r: r + 60 }
+    })
+
+    const k = compMeta.length
+    // when k is small, use a minimum circle radius; otherwise compute radius to satisfy separation
+    const paddingBetween = 80
+    let circleR = 800
+    if (k > 1) {
+      // compute max required separation between adjacent component centers
+      let maxReq = 0
+      for (let i = 0; i < k; i++) {
+        for (let j = i + 1; j < k; j++) {
+          const req = compMeta[i].r + compMeta[j].r + paddingBetween
+          if (req > maxReq) maxReq = req
+        }
+      }
+      const angle = Math.PI / k
+      const denom = Math.max(Math.sin(angle), 0.001)
+      circleR = Math.max(circleR, (maxReq) / (2 * denom))
+    }
+
+    // place component centers evenly on the circle
+    const centerOffsetX = 0
+    const centerOffsetY = 0
+    for (let i = 0; i < compMeta.length; i++) {
+      const theta = (i / compMeta.length) * Math.PI * 2
+      const cx = Math.cos(theta) * circleR + centerOffsetX
+      const cy = Math.sin(theta) * circleR + centerOffsetY
+      for (const node of compMeta[i].nodes) {
+        node.x = (node.x || 0) - compMeta[i].cx + cx
+        node.y = (node.y || 0) - compMeta[i].cy + cy
+      }
+    }
+
+    // Adjust edge lengths: short inside component, longer between components
+    const compIndexById = {}
+    components.forEach((comp, ci) => { for (const id of comp) compIndexById[id] = ci })
+    for (let i = 0; i < edgesList.length; i++) {
+      try {
+        const e = edgesList[i]
+        const from = e.from || e.source || e.f
+        const to = e.to || e.target || e.t
+        const ciFrom = compIndexById[from]
+        const ciTo = compIndexById[to]
+        if (ciFrom !== undefined && ciTo !== undefined && ciFrom === ciTo) {
+          e.length = e.length || 120
+        } else {
+          e.length = e.length || 360
+        }
+      } catch (ee) {
+        // ignore
+      }
+    }
+  }
+
+  let nodes
+  let edges
+  try {
+    nodes = new DataSet(spiralNodes)
+  } catch (err) {
+    console.error('GraphCanvas: failed to build nodes DataSet', err)
+    nodes = new DataSet([])
+  }
+
+  try {
+    edges = new DataSet(edgesList)
+  } catch (err) {
+    console.error('GraphCanvas: failed to build edges DataSet', err)
+    edges = new DataSet([])
+  }
 
   const options = {
     ...networkOptions,
@@ -343,10 +535,26 @@ function renderGraph() {
   }
 
   network = new Network(graphContainer.value, { nodes, edges }, options)
-
-  if (useSpiralLayout.value) {
-    network.fit({ animation: { duration: 0 } })
+  // Debug: log number of nodes/edges so we can see rendering in browser console
+  try {
+    console.info('GraphCanvas: rendering graph', {
+      nodeCount: Array.isArray(nodesList) ? nodesList.length : (nodesList && nodesList.length) || 0,
+      edgeCount: Array.isArray(edgesList) ? edgesList.length : (edgesList && edgesList.length) || 0,
+      useSpiral: useSpiralLayout.value,
+      rawNodesType: Array.isArray(rawNodes) ? 'array' : typeof rawNodes,
+    })
+  } catch (e) {
+    console.warn('GraphCanvas: logging failed', e)
   }
+
+  // Auto-fit the graph to the viewport so nodes are visible
+  try {
+    network.fit({ animation: { duration: 250 } })
+  } catch (e) {
+    // ignore
+  }
+  // expose for debugging
+  try { window.__GraphNetwork = network } catch (_) {}
 }
 
 // ── Graph Controls ─────────────────────────────────────────────

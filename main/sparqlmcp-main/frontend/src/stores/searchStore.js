@@ -214,7 +214,13 @@ export const useSearchStore = defineStore('search', () => {
         sparqlQuery.value = payload.sparql || ''
         rawResults.value = payload.results || null
         graphData.value = payload.graph || null
-        summary.value = payload.summary?.text || null
+        // Accept multiple summary shapes: { text: ... } or { summary: '...' } or a plain string
+        summary.value = null
+        if (payload.summary) {
+          if (typeof payload.summary === 'string') summary.value = payload.summary
+          else if (payload.summary.text) summary.value = payload.summary.text
+          else if (payload.summary.summary) summary.value = payload.summary.summary
+        }
 
         const mappedResults = mapBindingsToEntities(payload)
         results.value = mappedResults.length > 0 ? mappedResults : []

@@ -636,6 +636,61 @@ def _call_openrouter(nl_query: str, *, retry: bool, previous_query: str | None) 
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+def _call_raw_llm(prompt: str) -> dict:
+    """Call the configured LLM provider with a raw prompt and return parsed JSON.
+
+    This is used only for optional summarization. If the provider isn't configured
+    or the call fails, raise HTTPException so callers can fallback.
+    """
+    provider = os.environ.get("LLM_PROVIDER", "openrouter").strip().lower()
+    if provider in {"claude", "anthropic"}:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set for summary generation.")
+        model = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-latest")
+        max_tokens = int(os.environ.get("CLAUDE_MAX_TOKENS", "300"))
+        temperature = float(os.environ.get("CLAUDE_TEMPERATURE", "0.0"))
+        payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": [{"role": "user", "content": prompt}]}
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=30)
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Claude API error (summary): {exc}") from exc
+        data = response.json()
+        content = data.get("content", [])
+        combined = "".join(part.get("text", "") for part in content if part.get("type") == "text")
+    else:
+        # default to openrouter-compatible endpoint
+        api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if not api_key:
+            raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY is not set for summary generation.")
+        base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+        model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+        max_tokens = int(os.environ.get("OPENROUTER_MAX_TOKENS", "300"))
+        temperature = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.0"))
+        payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": [{"role": "user", "content": prompt}]}
+        headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+        url = base_url.rstrip("/") + "/chat/completions"
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"OpenRouter API error (summary): {exc}") from exc
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise HTTPException(status_code=502, detail="OpenRouter API returned empty choices for summary.")
+        message = choices[0].get("message", {})
+        combined = message.get("content", "") or choices[0].get("text", "")
+
+    try:
+        return _extract_json(combined)
+    except ValueError:
+        # If LLM didn't return parseable JSON, raise so caller can fallback
+        raise HTTPException(status_code=502, detail="LLM summary did not return JSON")
+
+
 def _call_llm(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
     provider = os.environ.get("LLM_PROVIDER", "openrouter").strip().lower()
     if provider in {"claude", "anthropic"}:
@@ -650,6 +705,7 @@ class NLQueryOptions(BaseModel):
     timeout_ms: int = Field(default=30000, ge=1000, le=120000)
     expose_sparql: bool = True
     refine_on_empty: bool = True
+    use_llm_summary: bool = True
 
 
 class NLQueryRequest(BaseModel):
@@ -729,10 +785,22 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
     trace_id = uuid.uuid4().hex
     options = request.options or NLQueryOptions()
 
-    first = _call_llm(request.nl_query, retry=False, previous_query=None)
-    query = str(first.get("query", "")).strip()
-    if not query:
-        raise HTTPException(status_code=502, detail="LLM response did not include a query.")
+    # Allow opt-out of LLM-based NL->SPARQL generation via env var for stability/testing.
+    disable_llm = os.environ.get("DISABLE_LLM_NL2SPARQL", "").strip().lower() in {"1", "true", "yes"}
+    if disable_llm:
+        query = _build_fallback_query(request.nl_query)
+    else:
+        first = _call_llm(request.nl_query, retry=False, previous_query=None)
+        query = str(first.get("query", "")).strip()
+        if not query:
+            raise HTTPException(status_code=502, detail="LLM response did not include a query.")
+
+    # If the LLM returned a query that still contains natural-language tokens
+    # (e.g., 'tell', 'about', 'list'), treat it as a failure and use the
+    # programmatic fallback query builder instead. This avoids returning
+    # queries that embed user prompt text and produce generic results.
+    if re.search(r"\b(tell|about|list|show|find|what|which)\b", query, flags=re.IGNORECASE):
+        query = _build_fallback_query(request.nl_query)
 
     if _query_looks_too_generic(request.nl_query, query):
         query = _build_fallback_query(request.nl_query)
@@ -745,12 +813,44 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
     query = _ensure_limit(query, limit_default)
     endpoint = _route_endpoint(query)
 
-    result = await execute_sparql(
-        endpoint=endpoint,
-        query=query,
-        format=options.format,
-        timeout_ms=options.timeout_ms,
-    )
+    logging.info("Executing SPARQL (truncated): %s", (query or '')[:400])
+    try:
+        result = await execute_sparql(
+            endpoint=endpoint,
+            query=query,
+            format=options.format,
+            timeout_ms=options.timeout_ms,
+        )
+    except Exception as exc:
+        # If the first query fails (e.g., malformed or unsupported constructs),
+        # retry with a minimal, safer query that filters on the first meaningful
+        # search term. This prevents a 500 response and returns something useful.
+        logging.warning("Initial SPARQL execution failed: %s; retrying with safe query", exc)
+        terms = _extract_search_terms(request.nl_query)
+        fallback_term = terms[0] if terms else "cve"
+        safe_query = (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX cve: <https://w3id.org/sepses/vocab/ref/cve#>\n"
+            "SELECT DISTINCT ?s ?label ?description ?issued ?modified WHERE {\n"
+            "  ?s a cve:CVE .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s dcterms:description ?description }\n"
+            f"  FILTER(CONTAINS(LCASE(COALESCE(?label, ?description, "")), \"{fallback_term}\"))\n"
+            "}\n"
+            "LIMIT 100"
+        )
+        try:
+            result = await execute_sparql(
+                endpoint=endpoint,
+                query=safe_query,
+                format=options.format,
+                timeout_ms=options.timeout_ms,
+            )
+            query = safe_query
+        except Exception as exc2:
+            logging.exception("Safe fallback SPARQL also failed: %s", exc2)
+            raise HTTPException(status_code=502, detail=f"SPARQL execution failed: {exc2}") from exc2
 
     payload: dict[str, Any] | None = None
     if options.format == "sparql-results+json":
@@ -783,6 +883,100 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
 
     graph = await _fetch_relation_graph(endpoint, payload, timeout_ms=options.timeout_ms)
     summary = _build_extractive_summary(payload)
+
+    # If relation-graph extraction returned no nodes, build a minimal graph
+    # from the top result bindings so the frontend can display something.
+    try:
+        if (not graph) or (isinstance(graph, dict) and len(graph.get("nodes", [])) == 0):
+            bindings = (payload or {}).get("results", {}).get("bindings", []) or []
+            nodes = []
+            edges = []
+            root_id = "search-root"
+            if bindings:
+                nodes.append({"id": root_id, "label": "Search Results", "group": "target", "title": root_id})
+                seen = set()
+                for b in bindings[:12]:
+                    uri = b.get("s", {}).get("value") or b.get("entity", {}).get("value")
+                    label = None
+                    if isinstance(b.get("label", {}), dict):
+                        label = b.get("label", {}).get("value")
+                    elif isinstance(b.get("rdfs:label", {}), dict):
+                        label = b.get("rdfs:label", {}).get("value")
+                    if not uri:
+                        continue
+                    if uri in seen:
+                        continue
+                    seen.add(uri)
+                    nodes.append({
+                        "id": uri,
+                        "label": label or _short_resource_label(uri),
+                        "group": _classify_resource(uri),
+                        "title": uri,
+                    })
+                    edges.append({"from": root_id, "to": uri, "label": "result", "arrows": "to"})
+            graph = {"nodes": nodes, "edges": edges}
+    except Exception:
+        # If fallback graph generation fails, leave graph as-is (None)
+        pass
+
+    # Optionally produce an enhanced summary (Option B) built from top results.
+    if options.use_llm_summary:
+        bindings = (payload or {}).get("results", {}).get("bindings", []) or []
+        if bindings:
+            # Collect up to three top items with id/label and a short description sentence
+            items: list[tuple[str, str]] = []  # (id_or_label, short_desc)
+            for b in bindings[:3]:
+                label = None
+                # prefer label fields, fall back to rdfs:label or the 's' IRI tail
+                if isinstance(b.get("label", {}), dict):
+                    label = b.get("label", {}).get("value")
+                elif isinstance(b.get("rdfs:label", {}), dict):
+                    label = b.get("rdfs:label", {}).get("value")
+                if not label:
+                    s = b.get("s", {}).get("value") or b.get("entity", {}).get("value")
+                    if s:
+                        label = _short_resource_label(s)
+
+                desc = None
+                if isinstance(b.get("description", {}), dict):
+                    desc = b.get("description", {}).get("value")
+                elif isinstance(b.get("dcterms:description", {}), dict):
+                    desc = b.get("dcterms:description", {}).get("value")
+
+                short_desc = ""
+                if desc:
+                    short_desc = re.split(r"(?<=[.!?])\s+", str(desc).strip())[0]
+
+                if label:
+                    items.append((label, short_desc))
+
+            # Build Option B paragraph when we have at least one item
+            if items:
+                # Sentence 1: list items
+                names = [it[0] for it in items]
+                if len(names) == 1:
+                    first_sent = f"The data shows the following related CVE: {names[0]}."
+                elif len(names) == 2:
+                    first_sent = f"The data shows the following related CVEs: {names[0]} and {names[1]}."
+                else:
+                    first_sent = f"The data shows several related CVEs: {names[0]}, {names[1]}, and {names[2]}."
+
+                # Sentence 2: brief explanation per item when available
+                explanations = []
+                for name, sd in items:
+                    if sd:
+                        explanations.append(f"{name} involves {sd}")
+                    else:
+                        explanations.append(f"{name} involves a security-related issue")
+                if len(explanations) == 1:
+                    second_sent = explanations[0] + "."
+                else:
+                    second_sent = ", ".join(explanations[:-1]) + ", and " + explanations[-1] + "."
+
+                third_sent = "Use the CVE IDs to view details and mitigation steps."
+
+                summary_text = " ".join([first_sent, second_sent, third_sent])
+                summary = {"text": summary_text, "source": "auto", "source_count": len(items)}
 
     response_body = {
         "trace_id": trace_id,

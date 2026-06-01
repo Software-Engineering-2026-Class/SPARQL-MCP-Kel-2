@@ -39,9 +39,13 @@
         <div v-if="!store.isLoading && store.hasResults" class="results-grid">
           <!-- Left column: entity cards -->
           <section class="cards-column" aria-label="Search results">
-            <div v-if="store.summary" class="summary-card">
+            <div class="summary-card">
               <div class="summary-header">Explanation</div>
-              <div class="summary-body">{{ store.summary }}</div>
+              <div class="summary-body">
+                <template v-if="store.isLoading">Preparing summary…</template>
+                <template v-else-if="store.summary">{{ store.summary }}</template>
+                <template v-else>No concise summary available from the dataset for this query.</template>
+              </div>
             </div>
             <TransitionGroup name="card-list" tag="div" class="cards-list">
               <EntityCard
