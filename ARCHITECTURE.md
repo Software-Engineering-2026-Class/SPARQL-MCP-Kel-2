@@ -1,16 +1,13 @@
 # Multi-Agent Workflow Architecture
 
 ## Overview
+
 This document defines the multi-agent workflow for natural-language to SPARQL execution against CSKG endpoints, and the communication protocol between agents.
 
 ## Agent roles
 
-### Orchestrator (recommended)
-- Owns the end-to-end flow and state (trace id, retries, and timeouts).
-- Routes tasks to specialized agents based on intent.
-- Enforces guardrails (max tokens, max query size, endpoint allowlist).
-
 ### Query Planner Agent
+
 - Input: natural language question, user context, and available endpoints.
 - Output: SPARQL query plan, including target endpoint(s), prefixes, and expected variables.
 - Responsibilities:
@@ -19,6 +16,7 @@ This document defines the multi-agent workflow for natural-language to SPARQL ex
   - Provide fallback queries if the primary query fails.
 
 ### SPARQL Executor Agent
+
 - Input: SPARQL query and execution parameters.
 - Output: raw results and execution metadata (elapsed ms, row count, errors).
 - Responsibilities:
@@ -26,6 +24,7 @@ This document defines the multi-agent workflow for natural-language to SPARQL ex
   - Handle retries and timeouts based on policy.
 
 ### Reasoning / Analysis Agent
+
 - Input: raw SPARQL results and query plan.
 - Output: normalized facts, aggregations, and key findings.
 - Responsibilities:
@@ -34,18 +33,12 @@ This document defines the multi-agent workflow for natural-language to SPARQL ex
   - Flag missing or ambiguous results.
 
 ### Response Synthesizer Agent
+
 - Input: structured findings and supporting evidence.
 - Output: user-facing answer with references to evidence.
 - Responsibilities:
   - Generate concise explanations.
   - Include the generated SPARQL query if transparency is needed.
-
-### Metadata / VoID Agent (optional)
-- Input: endpoint URL(s).
-- Output: VoID and service description metadata.
-- Responsibilities:
-  - Call MCP tool `get_void_descriptions`.
-  - Cache and surface dataset metadata to improve query planning.
 
 ## Data layer and endpoints
 
@@ -67,42 +60,34 @@ This document defines the multi-agent workflow for natural-language to SPARQL ex
 
 ```mermaid
 flowchart TB
-  UI[UI / Client] --> ORC[Orchestrator]
-  ORC --> PLAN[Query Planner]
-  ORC --> META[Metadata / VoID Agent]
-  PLAN --> ORC
-  META --> ORC
-  ORC --> EXEC[SPARQL Executor]
+  UI[UI / Client] --> PLAN[Query Planner]
+  PLAN --> EXEC[SPARQL Executor]
   EXEC --> MCP[MCP Server]
   MCP --> SEPSES[SEPSES CSKG]
   MCP --> LOCAL[Local Triple Store]
   MCP --> FED[Federation Endpoint]
   MCP --> VOID[Local VoID Cache]
-  EXEC --> ORC
-  ORC --> REAS[Reasoning / Analysis]
-  REAS --> ORC
-  ORC --> SYN[Response Synthesizer]
+  MCP --> EXEC
+  EXEC --> REAS[Reasoning / Analysis]
+  REAS --> SYN[Response Synthesizer]
   SYN --> UI
 ```
 
 ```mermaid
 flowchart LR
-  UI[UI / Client] --> ORC[Orchestrator]
-  ORC --> PLAN[Query Planner]
-  PLAN --> ORC
-  ORC --> EXEC[SPARQL Executor]
+  UI[UI / Client] --> PLAN[Query Planner]
+  PLAN --> EXEC[SPARQL Executor]
   EXEC --> MCP[MCP Tool: run_sparql_query]
   MCP --> EXEC
-  EXEC --> ORC
-  ORC --> REAS[Reasoning / Analysis]
-  REAS --> ORC
-  ORC --> SYN[Response Synthesizer]
+  EXEC --> REAS[Reasoning / Analysis]
+  REAS --> SYN[Response Synthesizer]
   SYN --> UI
 ```
 
 ## Agent communication protocol
 
 ### Transport
+
 - Internal agent messages use a shared JSON envelope.
 - SPARQL execution uses MCP `tools/call` with JSON-RPC over stdio.
 
@@ -143,7 +128,7 @@ flowchart LR
 {
   "trace_id": "uuid",
   "from": "executor",
-  "to": "orchestrator",
+  "to": "planner",
   "intent": "error",
   "error": {
     "code": "SPARQL_TIMEOUT",
@@ -154,6 +139,7 @@ flowchart LR
 ```
 
 ### MCP tool call contract
+
 - Tool: `run_sparql_query`
 - Arguments:
   - `query` (required)
@@ -163,6 +149,7 @@ flowchart LR
   - preview text and full payload from the server
 
 ## Notes
+
 - If a remote endpoint has TLS issues, use `SPARQL_CA_BUNDLE` or temporarily set `SPARQL_VERIFY_SSL=false` for local testing only.
 - Keep a per-request `trace_id` to correlate logs across agents.
 - Prefer `SERVICE` only when the planner explicitly needs remote endpoints; otherwise use `DEFAULT_SPARQL_ENDPOINT`.
