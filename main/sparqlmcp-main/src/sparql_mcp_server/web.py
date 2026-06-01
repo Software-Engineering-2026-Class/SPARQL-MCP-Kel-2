@@ -123,6 +123,8 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
         "PREFIX cve: <https://w3id.org/sepses/vocab/ref/cve#>\n"
         "PREFIX cpe: <https://w3id.org/sepses/vocab/ref/cpe#>\n"
         "PREFIX cwe: <https://w3id.org/sepses/vocab/ref/cwe#>\n"
+        "PREFIX capec: <https://w3id.org/sepses/vocab/ref/capec#>\n"
+        "PREFIX snort: <https://w3id.org/sepses/vocab/ref/snort#>\n"
     )
     guidance = (
         "Return JSON only with keys: query, format, notes.\n"
@@ -130,6 +132,7 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
         "If uncertain, use rdfs:label or skos:altLabel with CONTAINS/LCASE filters.\n"
         "Always include a LIMIT (<= 100).\n"
         "Use SERVICE only if necessary to target a specific endpoint.\n"
+        "The knowledge graph contains CVE, CWE, CPE, CAPEC, and Snort Rule entities.\n"
     )
     if retry:
         guidance += "If the previous query returned no results, relax constraints and broaden filters.\n"
@@ -276,6 +279,55 @@ def _build_fallback_query(nl_query: str) -> str:
             "LIMIT 100"
         )
 
+    if "capec" in query_text or "attack pattern" in query_text:
+        terms = _extract_search_terms(nl_query)
+        escaped_terms = [term.replace('"', '\\"') for term in terms[:4]] if terms else []
+        filter_clause = ""
+        if escaped_terms:
+            filters = " || ".join(
+                f'CONTAINS(LCASE(STR(COALESCE(?label, ?description, ""))), "{term}")'
+                for term in escaped_terms
+            )
+            filter_clause = f"  FILTER({filters})\n"
+
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX capec: <http://w3id.org/sepses/vocab/ref/capec#>\n"
+            "SELECT DISTINCT ?s ?label ?description WHERE {\n"
+            "  ?s a capec:CAPEC .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s dcterms:description ?description }\n"
+            f"{filter_clause}"
+            "}\n"
+            "LIMIT 100"
+        )
+
+    if "snort" in query_text or "rule" in query_text or "signature" in query_text or "ids" in query_text:
+        terms = _extract_search_terms(nl_query)
+        escaped_terms = [term.replace('"', '\\"') for term in terms[:4]] if terms else []
+        filter_clause = ""
+        if escaped_terms:
+            filters = " || ".join(
+                f'CONTAINS(LCASE(STR(COALESCE(?label, ?message, ""))), "{term}")'
+                for term in escaped_terms
+            )
+            filter_clause = f"  FILTER({filters})\n"
+
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX snort: <http://w3id.org/sepses/vocab/ref/snort#>\n"
+            "SELECT DISTINCT ?s ?label ?message ?sid WHERE {\n"
+            "  ?s a snort:SnortRule .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s snort:message ?message }\n"
+            "  OPTIONAL { ?s snort:sid ?sid }\n"
+            f"{filter_clause}"
+            "}\n"
+            "LIMIT 100"
+        )
+
     terms = _extract_search_terms(nl_query)
     if not terms:
         terms = [nl_query.strip().lower()]
@@ -307,7 +359,11 @@ def _query_looks_too_generic(nl_query: str, query: str) -> bool:
     terms = _extract_search_terms(nl_query)
     content_terms = [
         term for term in terms
-        if term not in {"cve", "cwe", "cpe", "malware", "vulnerability", "vulnerabilities", "product", "target", "relation", "related"}
+        if term not in {
+            "cve", "cwe", "cpe", "capec", "snort", "malware",
+            "vulnerability", "vulnerabilities", "product", "target",
+            "relation", "related", "rule", "attack", "pattern",
+        }
     ]
     if content_terms and any(term in query_text for term in content_terms):
         return False
@@ -317,6 +373,10 @@ def _query_looks_too_generic(nl_query: str, query: str) -> bool:
     if re.search(r"\?s\s+a\s+cpe:cpe\b", query_text) and not re.search(r"\bfilter\b", query_text):
         return True
     if re.search(r"\?s\s+a\s+cwe:cwe\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    if re.search(r"\?s\s+a\s+capec:capec\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    if re.search(r"\?s\s+a\s+snort:snortrule\b", query_text) and not re.search(r"\bfilter\b", query_text):
         return True
     return False
 
@@ -349,6 +409,10 @@ def _classify_resource(value: str | None) -> str:
         or "/cwe/" in text
     ):
         return "vulnerability"
+    if "capec" in text or "attack pattern" in text or "/capec/" in text:
+        return "attack_pattern"
+    if "snort" in text or "rule" in text or "signature" in text or "/snort/" in text:
+        return "snort_rule"
     if "cpe" in text or "vendor" in text or "product" in text:
         return "target"
     if "malware" in text or "family" in text or "threat" in text:
@@ -409,24 +473,23 @@ def _build_relation_graph_rows(payload: dict[str, Any] | None) -> list[dict[str,
 def _build_extractive_summary(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     """Build a short extractive summary from the top descriptions in SPARQL results.
 
-    This is intentionally extractive (no LLM) and uses only data returned by the
-    SPARQL results to avoid hallucination.
+    Used as a fast, LLM-free fallback when the LLM summary call fails.
     """
     if not payload:
         return None
     bindings = payload.get("results", {}).get("bindings", []) or []
     descriptions: list[str] = []
     for b in bindings:
-        # Common description fields used by queries
         desc = (
-            b.get("description", {}) .get("value")
+            b.get("description", {}).get("value")
             if isinstance(b.get("description", {}), dict)
             else None
         )
         if not desc:
             desc = b.get("dcterms:description", {}).get("value") if isinstance(b.get("dcterms:description", {}), dict) else None
         if not desc:
-            # fallback: try label to give short context
+            desc = b.get("message", {}).get("value") if isinstance(b.get("message", {}), dict) else None
+        if not desc:
             desc = b.get("label", {}).get("value") if isinstance(b.get("label", {}), dict) else None
         if not desc:
             continue
@@ -439,8 +502,50 @@ def _build_extractive_summary(payload: dict[str, Any] | None) -> dict[str, Any] 
     if not descriptions:
         return None
 
-    summary_text = " — ".join(descriptions)
-    return {"text": summary_text, "source_count": len(descriptions)}
+    summary_text = " ".join(descriptions)
+    return {"text": summary_text, "source_count": len(descriptions), "source": "extractive"}
+
+
+def _build_llm_summary_prompt(nl_query: str, bindings: list[dict[str, Any]]) -> str:
+    """Build a lean, grounded summarisation prompt for the LLM.
+
+    Sends only the top 5 result rows with truncated values to keep token usage low
+    while still providing enough factual context for a readable NL summary.
+    """
+    _DESC_FIELDS = {"description", "dcterms:description", "message"}
+    _ID_FIELDS   = {"label", "s", "entity", "sid", "cve", "cwe", "capec", "vendor", "product"}
+
+    row_lines: list[str] = []
+    for i, b in enumerate(bindings[:5], start=1):
+        parts: list[str] = []
+        for field, cell in b.items():
+            if not isinstance(cell, dict):
+                continue
+            val = str(cell.get("value", "")).strip()
+            if not val:
+                continue
+            # Shorten long IRIs to their local name
+            if val.startswith("http") and len(val) > 60:
+                val = _short_resource_label(val)
+            # Truncate long description text to keep prompt compact
+            if field in _DESC_FIELDS and len(val) > 120:
+                val = val[:120].rstrip() + "…"
+            parts.append(f"{field}={val}")
+        if parts:
+            row_lines.append(f"  [{i}] " + ", ".join(parts))
+
+    data_block = "\n".join(row_lines) if row_lines else "  (no data)"
+
+    return (
+        "You are a cybersecurity analyst summarising knowledge-graph results for a user. "
+        "The graph contains CVE, CWE, CPE, CAPEC, and Snort Rule data.\n"
+        f"Question: {nl_query}\n"
+        f"Results:\n{data_block}\n\n"
+        "Write 2-3 plain-English sentences that directly answer the question using only the data above. "
+        "Cite specific IDs (e.g. CVE-XXXX, CWE-XX, CAPEC-XX, Snort SID) found in the results. "
+        "Briefly explain what each entity represents and close with one actionable remark. "
+        "Plain text only, no JSON or markdown."
+    )
 
 
 async def _fetch_relation_graph(endpoint: str, payload: dict[str, Any] | None, *, timeout_ms: int) -> dict[str, Any]:
@@ -537,50 +642,64 @@ LIMIT 40
     }
 
 
-def _call_claude(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+async def _generate_llm_summary(
+    nl_query: str,
+    bindings: list[dict[str, Any]],
+) -> str | None:
+    """Call OpenRouter to generate a grounded NL summary from SPARQL result rows.
+
+    Returns the summary text string, or None if the call fails or is unconfigured.
+    The caller should fall back to the extractive summary on None.
+    """
+    if not bindings:
+        return None
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set.")
+        return None
 
-    model = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-latest")
-    max_tokens = int(os.environ.get("CLAUDE_MAX_TOKENS", "800"))
-    temperature = float(os.environ.get("CLAUDE_TEMPERATURE", "0.2"))
+    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+    model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    # Summaries are short; limit tokens to keep latency low.
+    max_tokens = int(os.environ.get("OPENROUTER_SUMMARY_MAX_TOKENS",
+                                   os.environ.get("OPENROUTER_MAX_TOKENS", "400")))
+    http_referer = os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost:5173").strip()
+    app_title = os.environ.get("OPENROUTER_APP_TITLE", "SPARQL-MCP Kelompok 2").strip()
 
-    prompt = _build_llm_prompt(nl_query, retry=retry, previous_query=previous_query)
-    payload = {
+    prompt = _build_llm_summary_prompt(nl_query, bindings)
+    request_payload = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
+        # Low temperature for factual summarisation
+        "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}],
     }
-
     headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
+        "authorization": f"Bearer {api_key}",
+        "http-referer": http_referer,
+        "x-title": app_title,
         "content-type": "application/json",
     }
 
-    response = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers=headers,
-        json=payload,
-        timeout=60,
-    )
     try:
+        url = base_url.rstrip("/") + "/chat/completions"
+        # Run the blocking HTTP call in a thread so we don't block the event loop
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: requests.post(url, headers=headers, json=request_payload, timeout=30),
+        )
         response.raise_for_status()
-    except requests.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Claude API error: {exc}") from exc
-
-    data = response.json()
-    content = data.get("content", [])
-    combined = "".join(part.get("text", "") for part in content if part.get("type") == "text")
-    if not combined:
-        raise HTTPException(status_code=502, detail="Claude API returned empty content.")
-
-    try:
-        return _extract_json(combined)
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            return None
+        message = choices[0].get("message", {})
+        text = message.get("content", "").strip()
+        return text if text else None
+    except Exception as exc:
+        logging.warning("LLM summary generation failed (will use extractive fallback): %s", exc)
+        return None
 
 
 def _call_openrouter(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
@@ -637,52 +756,32 @@ def _call_openrouter(nl_query: str, *, retry: bool, previous_query: str | None) 
 
 
 def _call_raw_llm(prompt: str) -> dict:
-    """Call the configured LLM provider with a raw prompt and return parsed JSON.
+    """Call OpenRouter with a raw prompt and return parsed JSON.
 
     This is used only for optional summarization. If the provider isn't configured
     or the call fails, raise HTTPException so callers can fallback.
     """
-    provider = os.environ.get("LLM_PROVIDER", "openrouter").strip().lower()
-    if provider in {"claude", "anthropic"}:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not api_key:
-            raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set for summary generation.")
-        model = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-latest")
-        max_tokens = int(os.environ.get("CLAUDE_MAX_TOKENS", "300"))
-        temperature = float(os.environ.get("CLAUDE_TEMPERATURE", "0.0"))
-        payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": [{"role": "user", "content": prompt}]}
-        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-        response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=30)
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"Claude API error (summary): {exc}") from exc
-        data = response.json()
-        content = data.get("content", [])
-        combined = "".join(part.get("text", "") for part in content if part.get("type") == "text")
-    else:
-        # default to openrouter-compatible endpoint
-        api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-        if not api_key:
-            raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY is not set for summary generation.")
-        base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
-        model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
-        max_tokens = int(os.environ.get("OPENROUTER_MAX_TOKENS", "300"))
-        temperature = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.0"))
-        payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": [{"role": "user", "content": prompt}]}
-        headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
-        url = base_url.rstrip("/") + "/chat/completions"
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"OpenRouter API error (summary): {exc}") from exc
-        data = response.json()
-        choices = data.get("choices", [])
-        if not choices:
-            raise HTTPException(status_code=502, detail="OpenRouter API returned empty choices for summary.")
-        message = choices[0].get("message", {})
-        combined = message.get("content", "") or choices[0].get("text", "")
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY is not set for summary generation.")
+    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+    model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    max_tokens = int(os.environ.get("OPENROUTER_MAX_TOKENS", "300"))
+    temperature = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.0"))
+    payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": [{"role": "user", "content": prompt}]}
+    headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    url = base_url.rstrip("/") + "/chat/completions"
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"OpenRouter API error (summary): {exc}") from exc
+    data = response.json()
+    choices = data.get("choices", [])
+    if not choices:
+        raise HTTPException(status_code=502, detail="OpenRouter API returned empty choices for summary.")
+    message = choices[0].get("message", {})
+    combined = message.get("content", "") or choices[0].get("text", "")
 
     try:
         return _extract_json(combined)
@@ -692,12 +791,7 @@ def _call_raw_llm(prompt: str) -> dict:
 
 
 def _call_llm(nl_query: str, *, retry: bool, previous_query: str | None) -> dict:
-    provider = os.environ.get("LLM_PROVIDER", "openrouter").strip().lower()
-    if provider in {"claude", "anthropic"}:
-        return _call_claude(nl_query, retry=retry, previous_query=previous_query)
-    if provider in {"openrouter", "openrouter.ai", "openrouter-ai", "openai_compat", "openai-compatible", "router", "multi"}:
-        return _call_openrouter(nl_query, retry=retry, previous_query=previous_query)
-    raise HTTPException(status_code=500, detail=f"Unsupported LLM_PROVIDER: {provider}")
+    return _call_openrouter(nl_query, retry=retry, previous_query=previous_query)
 
 
 class NLQueryOptions(BaseModel):
@@ -919,64 +1013,18 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
         # If fallback graph generation fails, leave graph as-is (None)
         pass
 
-    # Optionally produce an enhanced summary (Option B) built from top results.
+    # Generate a natural-language summary grounded in the actual SPARQL result rows.
     if options.use_llm_summary:
-        bindings = (payload or {}).get("results", {}).get("bindings", []) or []
-        if bindings:
-            # Collect up to three top items with id/label and a short description sentence
-            items: list[tuple[str, str]] = []  # (id_or_label, short_desc)
-            for b in bindings[:3]:
-                label = None
-                # prefer label fields, fall back to rdfs:label or the 's' IRI tail
-                if isinstance(b.get("label", {}), dict):
-                    label = b.get("label", {}).get("value")
-                elif isinstance(b.get("rdfs:label", {}), dict):
-                    label = b.get("rdfs:label", {}).get("value")
-                if not label:
-                    s = b.get("s", {}).get("value") or b.get("entity", {}).get("value")
-                    if s:
-                        label = _short_resource_label(s)
-
-                desc = None
-                if isinstance(b.get("description", {}), dict):
-                    desc = b.get("description", {}).get("value")
-                elif isinstance(b.get("dcterms:description", {}), dict):
-                    desc = b.get("dcterms:description", {}).get("value")
-
-                short_desc = ""
-                if desc:
-                    short_desc = re.split(r"(?<=[.!?])\s+", str(desc).strip())[0]
-
-                if label:
-                    items.append((label, short_desc))
-
-            # Build Option B paragraph when we have at least one item
-            if items:
-                # Sentence 1: list items
-                names = [it[0] for it in items]
-                if len(names) == 1:
-                    first_sent = f"The data shows the following related CVE: {names[0]}."
-                elif len(names) == 2:
-                    first_sent = f"The data shows the following related CVEs: {names[0]} and {names[1]}."
-                else:
-                    first_sent = f"The data shows several related CVEs: {names[0]}, {names[1]}, and {names[2]}."
-
-                # Sentence 2: brief explanation per item when available
-                explanations = []
-                for name, sd in items:
-                    if sd:
-                        explanations.append(f"{name} involves {sd}")
-                    else:
-                        explanations.append(f"{name} involves a security-related issue")
-                if len(explanations) == 1:
-                    second_sent = explanations[0] + "."
-                else:
-                    second_sent = ", ".join(explanations[:-1]) + ", and " + explanations[-1] + "."
-
-                third_sent = "Use the CVE IDs to view details and mitigation steps."
-
-                summary_text = " ".join([first_sent, second_sent, third_sent])
-                summary = {"text": summary_text, "source": "auto", "source_count": len(items)}
+        result_bindings = (payload or {}).get("results", {}).get("bindings", []) or []
+        if result_bindings:
+            llm_text = await _generate_llm_summary(request.nl_query, result_bindings)
+            if llm_text:
+                summary = {
+                    "text": llm_text,
+                    "source": "llm",
+                    "source_count": min(len(result_bindings), 8),
+                }
+            # If LLM call failed, 'summary' keeps the extractive value already set above
 
     response_body = {
         "trace_id": trace_id,

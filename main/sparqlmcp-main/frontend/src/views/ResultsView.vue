@@ -39,12 +39,25 @@
         <div v-if="!store.isLoading && store.hasResults" class="results-grid">
           <!-- Left column: entity cards -->
           <section class="cards-column" aria-label="Search results">
-            <div class="summary-card">
-              <div class="summary-header">Explanation</div>
+            <div class="summary-card" role="region" aria-label="AI-generated explanation">
+              <div class="summary-header">
+                <!-- Bot / AI icon -->
+                <svg class="summary-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                  <rect x="3" y="8" width="18" height="13" rx="2" />
+                  <path d="M8 8V5a4 4 0 0 1 8 0v3" />
+                  <circle cx="9" cy="14" r="1.2" fill="currentColor" stroke="none" />
+                  <circle cx="15" cy="14" r="1.2" fill="currentColor" stroke="none" />
+                </svg>
+                <span>Explanation</span>
+              </div>
               <div class="summary-body">
-                <template v-if="store.isLoading">Preparing summary…</template>
+                <template v-if="store.isLoading">
+                  <span class="summary-dots" aria-label="Generating explanation">
+                    <span /><span /><span />
+                  </span>
+                </template>
                 <template v-else-if="store.summary">{{ store.summary }}</template>
-                <template v-else>No concise summary available from the dataset for this query.</template>
+                <template v-else>No summary available for this query.</template>
               </div>
             </div>
             <TransitionGroup name="card-list" tag="div" class="cards-list">
@@ -233,24 +246,72 @@ async function handleSearch(query) {
   text-align: center;
 }
 
-/* Summary card */
+/* ── Summary Card — matches EntityCard design system ──────── */
 .summary-card {
-  background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(255,255,255,0.03);
-  padding: 0.75rem;
-  border-radius: 8px;
+  background-color: #0e1c2f;
+  border: 1px solid #1e3554;
+  border-left: 3px solid #38bdf8;
+  border-radius: 0.5rem;
+  padding: 1rem 1.125rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(30, 53, 84, 0.6);
   margin-bottom: 0.75rem;
+  transition: border-color 0.2s ease;
 }
+
+.summary-card:hover {
+  border-color: rgba(56, 189, 248, 0.35);
+  border-left-color: #38bdf8;
+}
+
 .summary-header {
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: #e2e8f0;
-  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #38bdf8;
+  margin-bottom: 0.6rem;
 }
+
+.summary-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: #38bdf8;
+}
+
 .summary-body {
-  font-size: 0.9rem;
-  color: #cbd5e1;
-  line-height: 1.25;
+  font-size: 0.8375rem;
+  color: #94a3b8;
+  line-height: 1.65;
+}
+
+/* Typing indicator dots */
+.summary-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 1rem;
+}
+
+.summary-dots span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #38bdf8;
+  opacity: 0.4;
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+
+.summary-dots span:nth-child(2) { animation-delay: 0.2s; }
+.summary-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dot-pulse {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40%           { opacity: 1;   transform: scale(1);   }
 }
 
 /* ── Transition: fade-slide-up ────────────────────────────── */

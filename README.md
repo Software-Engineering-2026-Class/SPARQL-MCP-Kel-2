@@ -1,47 +1,65 @@
 # SPARQL-MCP-Kel-2
 
-Mengembangkan sistem analisis keamanan berbasis Agentic AI menggunakan SPARQL-MCP dan Cybersecurity Knowledge Graphs.
+Sistem analisis keamanan siber berbasis Agentic AI menggunakan SPARQL-MCP dan Cybersecurity Knowledge Graph (CSKG).
 
 ## Deskripsi
 
-Proyek ini mengimplementasikan sistem agentic AI untuk analisis keamanan siber yang mengintegrasikan Large Language Model (LLM) dengan Cybersecurity Knowledge Graph (CSKG) melalui framework SPARQL-MCP. Sistem ini memungkinkan query berbasis bahasa natural atas basis pengetahuan keamanan terstruktur, pembuatan query SPARQL secara otomatis, serta penalaran multi-agent untuk analisis ancaman dan kerentanan.
+Proyek ini mengimplementasikan sistem agentic AI yang mengintegrasikan Large Language Model (LLM) dengan Cybersecurity Knowledge Graph (CSKG) melalui framework SPARQL-MCP. Pengguna dapat mengajukan pertanyaan dalam bahasa natural, sistem secara otomatis membuat query SPARQL terhadap knowledge graph yang berisi data **CVE, CWE, CPE, CAPEC, dan Snort Rule**, lalu menampilkan hasil beserta penjelasan dalam bahasa yang mudah dipahami dan visualisasi graf relasi.
 
-Antarmuka chatbot/pencarian terinspirasi dari [WU Search AI](https://search.ai.wu.ac.at/), dan basis knowledge graph menggunakan dataset [SEPSES CSKG](https://sepses.ifs.tuwien.ac.at/).
+Antarmuka pencarian terinspirasi dari [WU Search AI](https://search.ai.wu.ac.at/), dan basis knowledge graph menggunakan dataset [SEPSES CSKG](https://sepses.ifs.tuwien.ac.at/).
 
 ## Dokumentasi
 
-Saat ini repository ini berisi modul **SPARQL-MCP Server** yang tersimpan di `main/sparqlmcp-main/`. Dokumentasi lengkap (setup, konfigurasi `.env`, dan cara menjalankan server) tersedia di:
+Dokumentasi teknis lengkap tersedia di:
 
-- `main/sparqlmcp-main/README.md`
+- [`main/sparqlmcp-main/README.md`](main/sparqlmcp-main/README.md) — setup backend, konfigurasi `.env`, dan cara menjalankan server
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — arsitektur multi-agent dan protokol komunikasi antar agen
+- [`main/sparqlmcp-main/IMPLEMENTATION.md`](main/sparqlmcp-main/IMPLEMENTATION.md) — panduan implementasi backend API dan integrasi frontend
+- [`main/sparqlmcp-main/SPARQL_queries.md`](main/sparqlmcp-main/SPARQL_queries.md) — suite kueri uji keamanan SPARQL (15+ kueri)
 
-## Struktur Folder (Saat Ini)
+## Struktur Folder
 
 ```
 .
+├─ ARCHITECTURE.md
+├─ ISSUE_PLAN.md
 ├─ LICENSE
 ├─ README.md
 └─ main/
-	└─ sparqlmcp-main/
-		├─ .env.example
-		├─ .gitignore
-		├─ pyproject.toml
-		├─ README.md
-		├─ requirements.txt
-		├─ src/
-			└─ sparql_mcp_server/
-				├─ __init__.py
-				├─ handlers.py
-				├─ server.py
-				└─ web.py
-		├─ frontend/
-			├─ .vscode/
-			├─ public/
-			└─ src/
-		└─ database/
-			└─ seed data/
-				├─graph0000001_cpe.ttl.gz
-				├─graph0000001_cve.ttl.gz
-				└─graph000001_cwe.ttl.gz
+   └─ sparqlmcp-main/
+      ├─ .env                    ← konfigurasi lokal (salin dari .env.example)
+      ├─ .env.example
+      ├─ .gitignore
+      ├─ Dockerfile
+      ├─ docker-compose.yml      ← menjalankan backend + Fuseki sekaligus
+      ├─ IMPLEMENTATION.md
+      ├─ pyproject.toml
+      ├─ README.md
+      ├─ requirements.txt
+      ├─ SPARQL_queries.md
+      ├─ src/
+      │  └─ sparql_mcp_server/
+      │     ├─ __init__.py
+      │     ├─ handlers.py       ← eksekusi SPARQL via requests
+      │     ├─ server.py         ← MCP stdio server
+      │     └─ web.py            ← FastAPI backend (NL→SPARQL, summary, graph)
+      ├─ frontend/
+      │  ├─ index.html
+      │  ├─ package.json
+      │  ├─ vite.config.js
+      │  └─ src/
+      │     ├─ App.vue
+      │     ├─ main.js
+      │     ├─ style.css
+      │     ├─ components/       ← EntityCard, GraphCanvas, SparqlAccordion, dll.
+      │     ├─ stores/           ← searchStore.js (Pinia)
+      │     ├─ router/
+      │     └─ views/            ← HomeView, ResultsView, AboutView, DocumentationView
+      └─ database/
+         └─ seed data/
+            ├─ graph0000001_cpe.ttl.gz
+            ├─ graph0000001_cve.ttl.gz
+            └─ graph000001_cwe.ttl.gz
 ```
 
 ## Anggota Kelompok
@@ -53,16 +71,119 @@ Saat ini repository ini berisi modul **SPARQL-MCP Server** yang tersimpan di `ma
 | Adzrha Auryn Alius               | 24/533582/PA/22594 | [@teksarin](https://github.com/teksarin)   | Web Developer         |
 | Jessy Marcia Anabel              | 24/538431/PA/22846 | [@jsmarciaa](https://github.com/jsmarciaa) | Quality Assurance     |
 
-## Setup Triplestore
+## Setup & Menjalankan
 
-1. Cek apakah Java sudah terinstal di perangkat dengan `java --version` di terminal
-2. Install fuseki dengan format `apache-jena-fuseku-6.x.x.zip` pada laman [jena.apache.org/download/](https://jena.apache.org/download/)
-3. Ekstrak file zip
-4. Cari file bernama `fuseki-server.bat` dan jalankan
-5. Pergi ke laman [localhost:3030](http://localhost:3030/sepses/query)
-6. Unduh dataset yang ada pada Repositori ini pada `main\sparqlmcp-main\database\seed data`
-7. Ekstrak masing masing file .ttl
-8. Upload data dengan klik `add data` pada laman apache jena fuseki
+### Prasyarat
+
+- **Python 3.10+**
+- **Node.js 18+** (untuk frontend)
+- **Docker & Docker Compose** (direkomendasikan untuk triplestore)
+  _atau_ **Java** (untuk Fuseki manual)
+
+---
+
+### Opsi A — Docker Compose (Direkomendasikan)
+
+Cara paling mudah: jalankan backend Python + Fuseki triplestore sekaligus via Docker.
+
+```bash
+cd main/sparqlmcp-main
+
+# Salin dan isi konfigurasi
+cp .env.example .env
+# Edit .env: isi OPENROUTER_API_KEY
+
+# Jalankan backend + Fuseki
+docker compose up -d
+```
+
+Setelah container berjalan:
+- Backend API: `http://localhost:8765`
+- Fuseki UI: `http://localhost:3030` (login: `admin` / `admin123`)
+
+Buat dataset bernama `cskg` di Fuseki UI, lalu **muat seed data** (lihat bagian "Load Data" di bawah).
+
+---
+
+### Opsi B — Fuseki Manual + Backend Lokal
+
+**1. Jalankan Fuseki**
+
+1. Pastikan Java terinstal: `java --version`
+2. Unduh `apache-jena-fuseki-6.x.x.zip` dari [jena.apache.org/download](https://jena.apache.org/download/)
+3. Ekstrak dan jalankan `fuseki-server.bat` (Windows) atau `fuseki-server` (Linux/macOS)
+4. Buka `http://localhost:3030`, buat dataset dengan nama **`cskg`**
+
+**2. Instal dan jalankan backend**
+
+```bash
+cd main/sparqlmcp-main
+
+# Install dependensi Python
+python -m pip install -r requirements.txt
+python -m pip install -e .
+
+# Salin dan isi konfigurasi
+cp .env.example .env
+# Edit .env: isi OPENROUTER_API_KEY, pastikan:
+#   DEFAULT_SPARQL_ENDPOINT=http://localhost:3030/cskg/sparql
+#   FEDERATION_ENDPOINT=http://localhost:3030/cskg/sparql
+
+# Jalankan backend API
+sparql-mcp-web
+# → http://localhost:8765
+```
+
+---
+
+### Load Seed Data ke Fuseki
+
+1. Unduh file dari `main/sparqlmcp-main/database/seed data/`
+2. Ekstrak masing-masing file `.ttl.gz` menjadi `.ttl`
+3. Buka Fuseki UI → dataset `cskg` → **Add data** → upload file `.ttl`
+4. Verifikasi data termuat:
+   ```sparql
+   SELECT (COUNT(*) AS ?triples) WHERE { ?s ?p ?o }
+   ```
+
+---
+
+### Menjalankan Frontend
+
+```bash
+cd main/sparqlmcp-main/frontend
+npm install
+npm run dev
+# → http://localhost:5173
+```
+
+---
+
+## Konfigurasi `.env`
+
+File `.env` berada di `main/sparqlmcp-main/.env`. Variabel utama:
+
+| Variabel | Deskripsi | Contoh |
+|---|---|---|
+| `DEFAULT_SPARQL_ENDPOINT` | Endpoint SPARQL utama | `http://localhost:3030/cskg/sparql` |
+| `FEDERATION_ENDPOINT` | Endpoint untuk query multi-SERVICE | `http://localhost:3030/cskg/sparql` |
+| `LLM_PROVIDER` | Provider LLM (saat ini: `openrouter`) | `openrouter` |
+| `OPENROUTER_API_KEY` | API key dari openrouter.ai | `sk-or-v1-...` |
+| `OPENROUTER_MODEL` | Model yang digunakan | `openai/gpt-oss-120b:free` |
+| `OPENROUTER_MAX_TOKENS` | Batas token untuk NL→SPARQL | `800` |
+| `OPENROUTER_SUMMARY_MAX_TOKENS` | Batas token untuk ringkasan | `250` |
+| `CORS_ALLOW_ORIGINS` | Origin yang diizinkan mengakses API | `http://localhost:5173` |
+| `SPARQL_VERIFY_SSL` | Verifikasi TLS pada request SPARQL | `true` |
+
+## API Backend
+
+Backend FastAPI berjalan di `http://localhost:8765` dan menyediakan:
+
+| Endpoint | Method | Deskripsi |
+|---|---|---|
+| `/api/nl2sparql` | POST | Terima query bahasa natural → generate SPARQL → eksekusi → kembalikan hasil + ringkasan + graf relasi |
+| `/api/query` | POST | Eksekusi raw SPARQL query langsung |
+| `/api/health` | GET | Health check |
 
 ## Referensi
 
@@ -71,5 +192,9 @@ Saat ini repository ini berisi modul **SPARQL-MCP Server** yang tersimpan di `ma
 - Ekelhart, A. et al. (2024). RAGE-KG: Retrieval-Augmented Generation with Enterprise Knowledge Graphs. [UniVie](https://eprints.cs.univie.ac.at/8178/)
 - [SPARQL-MCP GitHub](https://github.com/semantisch/sparqlmcp)
 - [WU Search AI](https://search.ai.wu.ac.at/)
+- [OpenRouter.ai](https://openrouter.ai/)
 
-Disclaimer: All rights, intellectual property, credits, and original licenses for the SPARQL-MCP framework belong entirely to the original creators (https://github.com/semantisch/sparqlmcp). This repository is solely for integrating their work into our project. We do not claim ownership of these specific framework files.
+---
+
+> **Disclaimer:** All rights, intellectual property, credits, and original licenses for the SPARQL-MCP framework belong entirely to the original creators (<https://github.com/semantisch/sparqlmcp>). This repository is solely for integrating their work into our project. We do not claim ownership of these specific framework files.
+
