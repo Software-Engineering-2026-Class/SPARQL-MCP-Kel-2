@@ -87,7 +87,7 @@
           <path d="M21 21l-4.35-4.35M8 11h6" />
         </svg>
         <p class="empty-text">No results found</p>
-        <p class="empty-sub">Try a different query or use one of the suggestion chips.</p>
+        <p class="empty-sub">Try a different query.</p>
       </div>
 
     </main>

@@ -129,8 +129,10 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
     )
     guidance = (
         "Return JSON only with keys: query, format, notes.\n"
+        "The 'notes' field MUST contain a helpful, natural language summary or explanation answering the user's query.\n"
         "Use SPARQL 1.1 SELECT queries only.\n"
         "Always include a LIMIT (<= 100).\n"
+        "IMPORTANT: ALWAYS `SELECT ?label ?description` (and other relevant fields) when querying for entities so the UI can display them!\n"
         "Knowledge Graph Schema & Vocabulary (SEPSES):\n"
         "- Entities and attributes:\n"
         "  * cve:CVE has: cve:id (e.g. \"CVE-2021-44228\"), rdfs:label, dcterms:description, cve:cvssV3Severity, cve:cvssV3BaseScore.\n"
@@ -923,6 +925,12 @@ async def api_query(request: QueryRequest) -> dict:
 async def api_nl2sparql(request: NLQueryRequest) -> dict:
     trace_id = uuid.uuid4().hex
     options = request.options or NLQueryOptions()
+
+    # Sanitize query: strip leading/trailing whitespace and common punctuation symbols (like ?, !, ., etc.)
+    # that could interfere with search terms or fallback matchers.
+    raw_query = request.nl_query.strip()
+    cleaned_query = re.sub(r"[?!.,;:]+$", "", raw_query).strip()
+    request.nl_query = cleaned_query
 
     # Allow opt-out of LLM-based NL->SPARQL generation via env var for stability/testing.
     disable_llm = os.environ.get("DISABLE_LLM_NL2SPARQL", "").strip().lower() in {"1", "true", "yes"}
