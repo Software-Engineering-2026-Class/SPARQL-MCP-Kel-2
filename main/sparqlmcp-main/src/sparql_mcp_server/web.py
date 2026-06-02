@@ -120,6 +120,7 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
     prefix_block = (
         "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
         "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\n"
+        "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
         "PREFIX cve: <http://w3id.org/sepses/vocab/ref/cve#>\n"
         "PREFIX cpe: <http://w3id.org/sepses/vocab/ref/cpe#>\n"
         "PREFIX cwe: <http://w3id.org/sepses/vocab/ref/cwe#>\n"
@@ -129,10 +130,25 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
     guidance = (
         "Return JSON only with keys: query, format, notes.\n"
         "Use SPARQL 1.1 SELECT queries only.\n"
-        "If uncertain, use rdfs:label or skos:altLabel with CONTAINS/LCASE filters.\n"
         "Always include a LIMIT (<= 100).\n"
-        "Use SERVICE only if necessary to target a specific endpoint.\n"
-        "The knowledge graph contains CVE, CWE, CPE, CAPEC, and Snort Rule entities.\n"
+        "Knowledge Graph Schema & Vocabulary (SEPSES):\n"
+        "- Entities and attributes:\n"
+        "  * cve:CVE has: cve:id (e.g. \"CVE-2021-44228\"), rdfs:label, dcterms:description, cve:cvssV3Severity, cve:cvssV3BaseScore.\n"
+        "  * cwe:CWE has: cwe:id (e.g. \"CWE-20\"), rdfs:label, dcterms:description.\n"
+        "  * cpe:CPE has: cpe:id, rdfs:label, cpe:title, cpe:hasVendor, cpe:hasProduct, cpe:version.\n"
+        "  * capec:CAPEC has: capec:id, rdfs:label, dcterms:description.\n"
+        "  * snort:SnortRule has: snort:sid, rdfs:label, snort:message, snort:ruleText.\n"
+        "- Relationships:\n"
+        "  * ?cve cve:hasCWE ?cwe .\n"
+        "  * ?cve cve:affectsProduct ?cpe .\n"
+        "  * ?cve cve:relatedCAPEC ?capec .\n"
+        "  * ?cve cve:hasSnortRule ?snortRule .\n"
+        "  * ?cwe cwe:relatedAttackPattern ?capec .\n"
+        "Guidelines:\n"
+        "- To search for a specific CVE by its ID, query `?s cve:id ?id . FILTER(?id = \"CVE-XXXX-XXXX\")` rather than CONTAINS on description.\n"
+        "- To search for general terms, use `FILTER(CONTAINS(LCASE(STR(?val)), \"search_term\"))` on rdfs:label or dcterms:description.\n"
+        "- Extract key cybersecurity terms (e.g., 'malware', 'windows', 'botnet') from conversational prompts (e.g., 'tell me about...'). DO NOT include conversational filler words in your FILTER CONTAINS clauses.\n"
+        "- For multi-topic, broad or general questions (e.g., relations between CVE/CPE/CWE), use OPTIONAL blocks for relationship fields so the entire query doesn't fail if some relations don't exist for all records.\n"
     )
     if retry:
         guidance += "If the previous query returned no results, relax constraints and broaden filters.\n"
@@ -636,6 +652,26 @@ LIMIT 40
                     "title": predicate,
                 }
 
+    if seed_uris:
+        root_id = "search-root"
+        node_map[root_id] = {
+            "id": root_id,
+            "label": "Search Results",
+            "group": "target",
+            "title": "Search Results",
+        }
+        for uri in seed_uris:
+            if uri not in node_map:
+                node_map[uri] = _build_relation_graph_node(uri)
+            edge_key = (root_id, "result", uri)
+            edge_map[edge_key] = {
+                "from": root_id,
+                "to": uri,
+                "label": "result",
+                "arrows": "to",
+                "title": "Result of search query",
+            }
+
     return {
         "nodes": list(node_map.values()),
         "edges": list(edge_map.values()),
@@ -898,15 +934,6 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
         if not query:
             raise HTTPException(status_code=502, detail="LLM response did not include a query.")
 
-    # If the LLM returned a query that still contains natural-language tokens
-    # (e.g., 'tell', 'about', 'list'), treat it as a failure and use the
-    # programmatic fallback query builder instead. This avoids returning
-    # queries that embed user prompt text and produce generic results.
-    if re.search(r"\b(tell|about|list|show|find|what|which)\b", query, flags=re.IGNORECASE):
-        query = _build_fallback_query(request.nl_query)
-
-    if _query_looks_too_generic(request.nl_query, query):
-        query = _build_fallback_query(request.nl_query)
 
     _reject_unsafe_query(query)
     _validate_query_size(query)
@@ -934,7 +961,7 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
         safe_query = (
             "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
             "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
-            "PREFIX cve: <https://w3id.org/sepses/vocab/ref/cve#>\n"
+            "PREFIX cve: <http://w3id.org/sepses/vocab/ref/cve#>\n"
             "SELECT DISTINCT ?s ?label ?description ?issued ?modified WHERE {\n"
             "  ?s a cve:CVE .\n"
             "  OPTIONAL { ?s rdfs:label ?label }\n"
@@ -963,26 +990,65 @@ async def api_nl2sparql(request: NLQueryRequest) -> dict:
             payload = None
 
     if options.refine_on_empty and _is_empty_results(payload):
-        fallback_query = _build_fallback_query(request.nl_query)
-        _reject_unsafe_query(fallback_query)
-        _validate_query_size(fallback_query)
-        _validate_endpoints(fallback_query)
-        fallback_query = _ensure_limit(fallback_query, limit_default)
-        fallback_endpoint = _route_endpoint(fallback_query)
-        fallback_result = await execute_sparql(
-            endpoint=fallback_endpoint,
-            query=fallback_query,
-            format=options.format,
-            timeout_ms=options.timeout_ms,
-        )
-        query = fallback_query
-        endpoint = fallback_endpoint
-        result = fallback_result
-        if options.format == "sparql-results+json":
+        logging.info("Initial query returned empty results. Retrying with LLM refinement...")
+        llm_retry_success = False
+        if not disable_llm:
             try:
-                payload = json.loads(result.payload_text)
-            except json.JSONDecodeError:
-                payload = None
+                refined = _call_llm(request.nl_query, retry=True, previous_query=query)
+                refined_query = str(refined.get("query", "")).strip()
+                if refined_query and refined_query != query:
+                    if not re.search(r"\b(tell|about|list|show|find|what|which)\b", refined_query, flags=re.IGNORECASE):
+                        _reject_unsafe_query(refined_query)
+                        _validate_query_size(refined_query)
+                        _validate_endpoints(refined_query)
+                        refined_query = _ensure_limit(refined_query, limit_default)
+                        refined_endpoint = _route_endpoint(refined_query)
+                        
+                        refined_result = await execute_sparql(
+                            endpoint=refined_endpoint,
+                            query=refined_query,
+                            format=options.format,
+                            timeout_ms=options.timeout_ms,
+                        )
+                        refined_payload = None
+                        if options.format == "sparql-results+json":
+                            try:
+                                refined_payload = json.loads(refined_result.payload_text)
+                            except json.JSONDecodeError:
+                                refined_payload = None
+                        
+                        if not _is_empty_results(refined_payload):
+                            query = refined_query
+                            endpoint = refined_endpoint
+                            result = refined_result
+                            payload = refined_payload
+                            llm_retry_success = True
+                            logging.info("LLM refinement succeeded in getting results.")
+            except Exception as exc:
+                logging.warning("LLM refinement failed or threw exception: %s", exc)
+
+        if not llm_retry_success:
+            logging.info("LLM refinement failed or was empty. Falling back to programmatic fallback query.")
+            fallback_query = _build_fallback_query(request.nl_query)
+            _reject_unsafe_query(fallback_query)
+            _validate_query_size(fallback_query)
+            _validate_endpoints(fallback_query)
+            fallback_query = _ensure_limit(fallback_query, limit_default)
+            fallback_endpoint = _route_endpoint(fallback_query)
+            fallback_result = await execute_sparql(
+                endpoint=fallback_endpoint,
+                query=fallback_query,
+                format=options.format,
+                timeout_ms=options.timeout_ms,
+            )
+            query = fallback_query
+            endpoint = fallback_endpoint
+            result = fallback_result
+            if options.format == "sparql-results+json":
+                try:
+                    payload = json.loads(result.payload_text)
+                except json.JSONDecodeError:
+                    payload = None
 
     graph = await _fetch_relation_graph(endpoint, payload, timeout_ms=options.timeout_ms)
     summary = _build_extractive_summary(payload)
