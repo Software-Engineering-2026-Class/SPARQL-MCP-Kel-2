@@ -39,7 +39,7 @@ function extractReadableId(value) {
 
 function extractClassName(value) {
   const shortId = extractReadableId(value)
-  const match = shortId.match(/(CVE-\d{4}-\d+|CWE-\d+|CPE)/i)
+  const match = shortId.match(/(CVE-\d{4}-\d+|CWE-\d+|CPE|CAPEC-\d+|SnortRule)/i)
   if (match) return match[1].toUpperCase()
   return toTitleCase(shortId)
 }
@@ -56,9 +56,9 @@ function compactUrlDisplay(value) {
 
 function inferEntityGroup({ typeValue, readableId, entityUri, label }) {
   const haystack = [typeValue, readableId, entityUri, label].join(' ').toLowerCase()
-  if (haystack.includes('cve') || haystack.includes('vulnerab') || haystack.includes('cwe')) return 'vulnerability'
+  if (haystack.includes('cve') || haystack.includes('vulnerab') || haystack.includes('cwe') || haystack.includes('capec') || haystack.includes('attack')) return 'vulnerability'
   if (haystack.includes('cpe') || haystack.includes('product') || haystack.includes('vendor')) return 'target'
-  if (haystack.includes('malware') || haystack.includes('family') || haystack.includes('threat')) return 'malware'
+  if (haystack.includes('malware') || haystack.includes('family') || haystack.includes('threat') || haystack.includes('snort') || haystack.includes('rule')) return 'malware'
   return 'target'
 }
 
@@ -69,8 +69,14 @@ function mapBindingsToEntities(payload) {
   }
 
   return bindings.slice(0, 8).map((binding, index) => {
+    // Debug: log raw binding structure to find why values aren't extracted
+    if (index === 0) {
+      console.debug('mapBindingsToEntities: first binding raw:', JSON.stringify(binding, null, 2))
+      console.debug('mapBindingsToEntities: binding keys:', Object.keys(binding || {}))
+    }
+
     const label = pickBindingValue(binding, ['label', 'name', 'title', 'entityLabel', 'familyLabel'])
-    const entityUri = pickBindingValue(binding, ['s', 'entity', 'subject', 'resource', 'uri', 'id'])
+    let entityUri = pickBindingValue(binding, ['s', 'entity', 'subject', 'resource', 'uri', 'id'])
     const typeValue = pickBindingValue(binding, ['type', 'category', 'kind', 'class', 'cve', 'cwe', 'cpe'])
     const description = pickBindingValue(binding, ['description', 'summary', 'notes', 'comment'])
     const scoreValue = pickBindingValue(binding, ['cvss', 'score', 'severity', 'baseScore'])
@@ -79,16 +85,71 @@ function mapBindingsToEntities(payload) {
       pickBindingValue(binding, ['vector', 'primaryVector', 'attackVector', 'accessVector'])
     ].filter(Boolean)
 
+    // If entityUri is still empty, scan all binding keys for any URI value
+    if (!entityUri && binding && typeof binding === 'object') {
+      for (const key of Object.keys(binding)) {
+        const cell = binding[key]
+        const val = cell?.value || (typeof cell === 'string' ? cell : '')
+        if (val && String(val).startsWith('http')) {
+          entityUri = String(val)
+          break
+        }
+      }
+    }
+
+    // Also try to extract label from description if label is empty
+    const effectiveLabel = label || pickBindingValue(binding, ['rdfs:label', 'skos:prefLabel'])
+
+    if (index === 0) {
+      console.debug('mapBindingsToEntities: extracted →', { label, entityUri, typeValue, description: description?.slice(0, 60) })
+    }
+
+    // --- Build a meaningful display name ---
+    // 1) Try rdfs:label from binding
+    // 2) Try extracting a recognizable ID (CVE-XXXX, CWE-XX, etc.) from the URI
+    // 3) Try the URI tail segment (last path component)
+    // 4) Use a truncated description
+    // 5) Final fallback to "Result N"
+    const uriTail = extractReadableId(entityUri)
+    const labelTail = extractReadableId(effectiveLabel)
+
+    // Look for well-known ID patterns in the URI or label
+    const idPatterns = /(?:CVE-\d{4}-\d+|CWE-\d+|CPE[:\-][\w:.~-]+|CAPEC-\d+)/i
+    const uriIdMatch = (entityUri || '').match(idPatterns)
+    const labelIdMatch = (effectiveLabel || '').match(idPatterns)
+    const extractedId = uriIdMatch?.[0] || labelIdMatch?.[0] || ''
+
+    // Build a readable name: prefer label > extracted ID > URI tail > description snippet
+    let displayName = ''
+    if (label) {
+      displayName = label
+    } else if (extractedId) {
+      displayName = extractedId
+    } else if (uriTail && uriTail !== entityUri) {
+      displayName = uriTail
+    } else if (labelTail && labelTail !== label) {
+      displayName = labelTail
+    } else if (description) {
+      displayName = shortenText(description, 80)
+    }
+    if (!displayName) {
+      displayName = `Result ${index + 1}`
+    }
+
+    // The ID field should prefer the well-known ID pattern or the URI tail
+    const readableId = extractedId || uriTail || labelTail || `result-${index + 1}`
+
     const badge = scoreValue
       ? { label: `Score ${scoreValue}`, variant: 'cvss', score: Number(scoreValue) || scoreValue }
-      : { label: typeValue ? extractClassName(typeValue) : 'Result', variant: 'danger' }
+      : { label: extractedId || extractClassName(typeValue) || toTitleCase(uriTail) || 'Result', variant: 'danger' }
 
-    const readableId = extractReadableId(entityUri) || extractReadableId(label) || `result-${index + 1}`
     const subtitle = typeValue
       ? extractClassName(typeValue)
-      : readableId
-        ? readableId.split('-')[0].toUpperCase()
-        : 'Search Result'
+      : extractedId
+        ? extractedId.split('-')[0].toUpperCase()
+        : readableId
+          ? readableId.split('-')[0].toUpperCase()
+          : 'Search Result'
 
     const normalizedDescription = description || ''
     const entityGroup = inferEntityGroup({ typeValue, readableId, entityUri, label })
@@ -96,16 +157,24 @@ function mapBindingsToEntities(payload) {
     const fields = []
     for (const [fieldLabel, fieldValue] of [
       ['ID', readableId],
-      ['Source', entityUri],
-      ['Type', extractClassName(typeValue)],
+      ['Type', extractedId ? extractedId.split('-')[0].toUpperCase() : extractClassName(typeValue)],
       ['Issued', pickBindingValue(binding, ['issued'])],
       ['Modified', pickBindingValue(binding, ['modified'])]
     ]) {
       if (!fieldValue) continue
       fields.push({
         label: fieldLabel,
-        value: fieldLabel === 'Source' ? fieldValue : shortenText(fieldValue, 120),
-        wide: fieldLabel === 'Source'
+        value: shortenText(fieldValue, 120),
+        wide: false
+      })
+    }
+
+    // Add Source URI as a wide field at the end
+    if (entityUri) {
+      fields.push({
+        label: 'Source',
+        value: entityUri,
+        wide: true
       })
     }
 
@@ -117,8 +186,8 @@ function mapBindingsToEntities(payload) {
       id: entityUri || `${readableId || label || 'result'}-${index}`,
       type: entityGroup,
       kind: extractClassName(typeValue),
-      title: readableId || label || `Result ${index + 1}`,
-      displayLabel: readableId || label || `Result ${index + 1}`,
+      title: displayName,
+      displayLabel: displayName,
       subtitle,
       badge,
       fields,

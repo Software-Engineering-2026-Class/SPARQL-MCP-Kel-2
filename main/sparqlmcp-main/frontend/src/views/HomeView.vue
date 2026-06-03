@@ -29,19 +29,6 @@
           @search="handleSearch"
         />
       </div>
-
-      <!-- Suggestion chips -->
-      <div class="hero-chips" role="list" aria-label="Search suggestions">
-        <SuggestionChip
-          v-for="chip in suggestions"
-          :key="chip.id"
-          :chip-id="chip.id"
-          :label="chip.label"
-          :icon="chip.icon"
-          role="listitem"
-          @click="applyChip"
-        />
-      </div>
     </main>
 
     <!-- ── Footer ─────────────────────────────────────────── -->
@@ -53,16 +40,13 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSearchStore } from '@/stores/searchStore.js'
-import { searchSuggestions } from '@/data/mockData.js'
 import Header        from '@/components/Header.vue'
 import SearchBar     from '@/components/SearchBar.vue'
-import SuggestionChip from '@/components/SuggestionChip.vue'
 import Footer        from '@/components/Footer.vue'
 
 const router      = useRouter()
 const store       = useSearchStore()
 const localQuery  = ref('')
-const suggestions = searchSuggestions
 
 /**
  * Triggered when the user submits the search form.
@@ -73,13 +57,6 @@ async function handleSearch(query) {
   store.performSearch(query)
   // Navigate immediately — results page shows loading state
   router.push({ name: 'Results' })
-}
-
-/**
- * Pre-fills the search bar when a suggestion chip is clicked.
- */
-function applyChip(label) {
-  localQuery.value = label
 }
 </script>
 
@@ -129,16 +106,7 @@ function applyChip(label) {
 .hero-search-wrapper {
   width: 100%;
   max-width: 600px;
-  margin: 0 auto 1.5rem;
-}
-
-/* Suggestion chips row */
-.hero-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.625rem;
-  justify-content: center;
-  max-width: 600px;
+  margin: 0;
 }
 
 /* ── Responsive ───────────────────────────────────────────── */
