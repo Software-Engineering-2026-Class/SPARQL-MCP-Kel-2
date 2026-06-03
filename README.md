@@ -21,6 +21,7 @@ Dokumentasi teknis lengkap tersedia di:
 ```
 .
 ├─ ARCHITECTURE.md
+├─ DIAGRAMS.md
 ├─ LICENSE
 ├─ README.md
 └─ main/
@@ -34,6 +35,7 @@ Dokumentasi teknis lengkap tersedia di:
       ├─ README.md
       ├─ requirements.txt
       ├─ SPARQL_queries.md
+      ├─ .dockerignore
       ├─ src/
       │  └─ sparql_mcp_server/
       │     ├─ __init__.py
@@ -56,7 +58,9 @@ Dokumentasi teknis lengkap tersedia di:
          └─ seed data/
             ├─ graph0000001_cpe.ttl.gz
             ├─ graph0000001_cve.ttl.gz
-            └─ graph000001_cwe.ttl.gz
+            ├─ graph000001_cwe.ttl.gz
+            ├─ graph000001_capec.ttl.gz
+            └─ graph000001_snortrule.ttl.gz
 ```
 
 ## Anggota Kelompok
@@ -95,6 +99,7 @@ docker compose up -d
 ```
 
 Setelah container berjalan:
+
 - Backend API: `http://localhost:8765`
 - Fuseki UI: `http://localhost:3030` (login: `admin` / `admin123`)
 
@@ -160,27 +165,27 @@ npm run dev
 
 File `.env` berada di `main/sparqlmcp-main/.env`. Variabel utama:
 
-| Variabel | Deskripsi | Contoh |
-|---|---|---|
-| `DEFAULT_SPARQL_ENDPOINT` | Endpoint SPARQL utama | `http://localhost:3030/cskg/sparql` |
-| `FEDERATION_ENDPOINT` | Endpoint untuk query multi-SERVICE | `http://localhost:3030/cskg/sparql` |
-| `LLM_PROVIDER` | Provider LLM (saat ini: `openrouter`) | `openrouter` |
-| `OPENROUTER_API_KEY` | API key dari openrouter.ai | `sk-or-v1-...` |
-| `OPENROUTER_MODEL` | Model yang digunakan | `openai/gpt-oss-120b:free` |
-| `OPENROUTER_MAX_TOKENS` | Batas token untuk NL→SPARQL | `800` |
-| `OPENROUTER_SUMMARY_MAX_TOKENS` | Batas token untuk ringkasan | `250` |
-| `CORS_ALLOW_ORIGINS` | Origin yang diizinkan mengakses API | `http://localhost:5173` |
-| `SPARQL_VERIFY_SSL` | Verifikasi TLS pada request SPARQL | `true` |
+| Variabel                        | Deskripsi                             | Contoh                              |
+| ------------------------------- | ------------------------------------- | ----------------------------------- |
+| `DEFAULT_SPARQL_ENDPOINT`       | Endpoint SPARQL utama                 | `http://localhost:3030/cskg/sparql` |
+| `FEDERATION_ENDPOINT`           | Endpoint untuk query multi-SERVICE    | `http://localhost:3030/cskg/sparql` |
+| `LLM_PROVIDER`                  | Provider LLM (saat ini: `openrouter`) | `openrouter`                        |
+| `OPENROUTER_API_KEY`            | API key dari openrouter.ai            | `sk-or-v1-...`                      |
+| `OPENROUTER_MODEL`              | Model yang digunakan                  | `openai/gpt-oss-120b:free`          |
+| `OPENROUTER_MAX_TOKENS`         | Batas token untuk NL→SPARQL           | `800`                               |
+| `OPENROUTER_SUMMARY_MAX_TOKENS` | Batas token untuk ringkasan           | `250`                               |
+| `CORS_ALLOW_ORIGINS`            | Origin yang diizinkan mengakses API   | `http://localhost:5173`             |
+| `SPARQL_VERIFY_SSL`             | Verifikasi TLS pada request SPARQL    | `true`                              |
 
 ## API Backend
 
 Backend FastAPI berjalan di `http://localhost:8765` dan menyediakan:
 
-| Endpoint | Method | Deskripsi |
-|---|---|---|
-| `/api/nl2sparql` | POST | Terima query bahasa natural → generate SPARQL → eksekusi → kembalikan hasil + ringkasan + graf relasi |
-| `/api/query` | POST | Eksekusi raw SPARQL query langsung |
-| `/api/health` | GET | Health check |
+| Endpoint         | Method | Deskripsi                                                                                             |
+| ---------------- | ------ | ----------------------------------------------------------------------------------------------------- |
+| `/api/nl2sparql` | POST   | Terima query bahasa natural → generate SPARQL → eksekusi → kembalikan hasil + ringkasan + graf relasi |
+| `/api/query`     | POST   | Eksekusi raw SPARQL query langsung                                                                    |
+| `/api/health`    | GET    | Health check                                                                                          |
 
 ## Referensi
 
@@ -194,4 +199,3 @@ Backend FastAPI berjalan di `http://localhost:8765` dan menyediakan:
 ---
 
 > **Disclaimer:** All rights, intellectual property, credits, and original licenses for the SPARQL-MCP framework belong entirely to the original creators (<https://github.com/semantisch/sparqlmcp>). This repository is solely for integrating their work into our project. We do not claim ownership of these specific framework files.
-
