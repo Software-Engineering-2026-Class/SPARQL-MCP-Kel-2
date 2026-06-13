@@ -32,7 +32,7 @@ def _load_env_file() -> None:
 
 def _looks_like_void(text: str) -> bool:
     lowered = text.lower()
-    return "void#" in lowered or "void:" in lowered
+    return "void" in lowered or "void:" in lowered
 
 
 def _looks_like_service_description(text: str) -> bool:
@@ -337,30 +337,6 @@ async def run() -> None:
     @server.list_tools()
     async def list_tools():
         tools = [
-            # Tool disabled: direct endpoint queries are routed through Fuseki now.
-            # Tool(
-            #     name="run_sparql_query",
-            #     description="Execute a SPARQL 1.1 query (supports SERVICE for federated parts)",
-            #     inputSchema={
-            #         "type": "object",
-            #         "required": ["endpoint", "query"],
-            #         "properties": {
-            #             "endpoint": {"type": "string"},
-            #             "query": {"type": "string"},
-            #             "format": {
-            #                 "type": "string",
-            #                 "enum": [
-            #                     "sparql-results+json",
-            #                     "text/turtle",
-            #                     "application/ld+json",
-            #                     "text/n3",
-            #                 ],
-            #                 "default": "sparql-results+json",
-            #             },
-            #             "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000},
-            #         },
-            #     },
-            # ),
             Tool(
                 name="run_sparql_query",
                 description=(
