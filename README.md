@@ -4,7 +4,7 @@ Sistem analisis keamanan siber berbasis Agentic AI menggunakan SPARQL-MCP dan Cy
 
 ## Deskripsi
 
-Proyek ini mengimplementasikan sistem agentic AI yang mengintegrasikan Large Language Model (LLM) dengan Cybersecurity Knowledge Graph (CSKG) melalui framework SPARQL-MCP. Pengguna dapat mengajukan pertanyaan dalam bahasa natural, sistem secara otomatis membuat query SPARQL terhadap knowledge graph yang berisi data **CVE, CWE, CPE, CAPEC, dan Snort Rule**, lalu menampilkan hasil beserta penjelasan dalam bahasa yang mudah dipahami dan visualisasi graf relasi.
+Proyek ini mengimplementasikan sistem agentic AI yang mengintegrasikan Large Language Model (LLM) dengan Cybersecurity Knowledge Graph (CSKG) melalui framework SPARQL-MCP. Pengguna dapat mengajukan pertanyaan dalam bahasa natural, sistem secara otomatis membuat query SPARQL terhadap knowledge graph yang berisi data **CVE, CWE, CPE, CAPEC, Snort Rule, MITRE ATT&CK (Enterprise & ICS), dan CISA ICS Advisory (ICSA)**, lalu menampilkan hasil beserta penjelasan dalam bahasa yang mudah dipahami dan visualisasi graf relasi.
 
 Antarmuka pencarian terinspirasi dari [WU Search AI](https://search.ai.wu.ac.at/), dan basis knowledge graph menggunakan dataset [SEPSES CSKG](https://sepses.ifs.tuwien.ac.at/).
 
@@ -24,18 +24,19 @@ Dokumentasi teknis lengkap tersedia di:
 ├─ DIAGRAMS.md
 ├─ LICENSE
 ├─ README.md
+├─ RELEASE_NOTES.md
 └─ main/
    └─ sparqlmcp-main/
       ├─ .env                    ← konfigurasi lokal (salin dari .env.example)
       ├─ .env.example
       ├─ .gitignore
+      ├─ .dockerignore
       ├─ Dockerfile
       ├─ docker-compose.yml      ← menjalankan backend + Fuseki sekaligus
       ├─ pyproject.toml
       ├─ README.md
       ├─ requirements.txt
       ├─ SPARQL_queries.md
-      ├─ .dockerignore
       ├─ src/
       │  └─ sparql_mcp_server/
       │     ├─ __init__.py
@@ -50,17 +51,38 @@ Dokumentasi teknis lengkap tersedia di:
       │     ├─ App.vue
       │     ├─ main.js
       │     ├─ style.css
-      │     ├─ components/       ← EntityCard, GraphCanvas, SparqlAccordion, dll.
+      │     ├─ components/       ← EntityCard, GraphCanvas, SearchBar,
+      │     │                       SparqlAccordion, Header, Footer,
+      │     │                       InfoPanel, StarBackground, dll.
+      │     ├─ data/             ← mockData.js
       │     ├─ stores/           ← searchStore.js (Pinia)
-      │     ├─ router/
-      │     └─ views/            ← HomeView, ResultsView, AboutView, DocumentationView
+      │     ├─ router/           ← index.js
+      │     └─ views/            ← HomeView, ResultsView, AboutView,
+      │                             DocumentationView
       └─ database/
          └─ seed data/
-            ├─ graph0000001_cpe.ttl.gz
-            ├─ graph0000001_cve.ttl.gz
-            ├─ graph000001_cwe.ttl.gz
-            ├─ graph000001_capec.ttl.gz
-            └─ graph000001_snortrule.ttl.gz
+            ├─ capec/
+            │  └─ capec_latest.zip-output.ttl
+            ├─ cat/                           ← MITRE ATT&CK
+            │  ├─ enterprise-attack.json-output.ttl
+            │  └─ ics-attack.json-output.ttl
+            ├─ cpe/
+            │  ├─ cpe-shacl-result.ttl
+            │  └─ official-cpe-dictionary_v2.3.xml.zip-output.ttl
+            ├─ cve/
+            │  ├─ nvdcve-1.1-2021.json.zip-output.ttl
+            │  ├─ nvdcve-1.1-2022.json.zip-output.ttl
+            │  ├─ nvdcve-1.1-2023.json.zip-output.ttl
+            │  └─ nvdcve-1.1-2024.json.zip-output.ttl
+            ├─ cwe/
+            │  └─ cwec_latest.xml.zip-output.ttl
+            ├─ icsa/                           ← CISA ICS Advisory
+            │  └─ CISA_ICS_ADV_Master.csv-output.ttl
+            └─ ifs tuwien/                     ← SEPSES original data
+               ├─ graph0000001_cpe.ttl.gz
+               ├─ graph0000001_cve.ttl.gz
+               ├─ graph000001_*.ttl.gz          (CWE, CAPEC, Snort, dll.)
+               └─ graph000002–000005_*.ttl.gz
 ```
 
 ## Anggota Kelompok
@@ -140,9 +162,23 @@ sparql-mcp-web
 
 ### Load Seed Data ke Fuseki
 
-1. Unduh file dari `main/sparqlmcp-main/database/seed data/`
-2. Ekstrak masing-masing file `.ttl.gz` menjadi `.ttl`
-3. Buka Fuseki UI → dataset `cskg` → **Add data** → upload file `.ttl`
+Seed data tersimpan di `main/sparqlmcp-main/database/seed data/` dengan struktur per-kategori:
+
+| Subdirektori    | Deskripsi                               | Format         |
+| --------------- | --------------------------------------- | -------------- |
+| `capec/`        | CAPEC attack patterns                   | `.ttl`         |
+| `cat/`          | MITRE ATT&CK (Enterprise + ICS)         | `.ttl`         |
+| `cpe/`          | CPE dictionary + SHACL validation       | `.ttl`         |
+| `cve/`          | NVD CVE 2021–2024                       | `.ttl`         |
+| `cwe/`          | CWE weakness catalog                    | `.ttl`         |
+| `icsa/`         | CISA ICS Advisories                     | `.ttl`         |
+| `ifs tuwien/`   | SEPSES original data (compressed)       | `.ttl.gz`      |
+
+**Cara memuat:**
+
+1. Buka Fuseki UI → dataset `cskg` → **Add data**
+2. Upload file `.ttl` dari masing-masing subdirektori di atas
+3. Untuk file `.ttl.gz` (di `ifs tuwien/`), ekstrak terlebih dahulu menjadi `.ttl`
 4. Verifikasi data termuat:
    ```sparql
    SELECT (COUNT(*) AS ?triples) WHERE { ?s ?p ?o }

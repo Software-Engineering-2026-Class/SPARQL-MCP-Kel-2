@@ -126,6 +126,8 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
         "PREFIX cwe: <http://w3id.org/sepses/vocab/ref/cwe#>\n"
         "PREFIX capec: <http://w3id.org/sepses/vocab/ref/capec#>\n"
         "PREFIX snort: <http://w3id.org/sepses/vocab/ref/snort#>\n"
+        "PREFIX attack: <http://w3id.org/sepses/vocab/ref/attack#>\n"
+        "PREFIX icsa: <http://w3id.org/sepses/vocab/ref/icsa#>\n"
     )
     guidance = (
         "Return JSON only with keys: query, format, notes.\n"
@@ -140,17 +142,24 @@ def _build_llm_prompt(nl_query: str, *, retry: bool, previous_query: str | None)
         "  * cpe:CPE has: cpe:id, rdfs:label, cpe:title, cpe:hasVendor, cpe:hasProduct, cpe:version.\n"
         "  * capec:CAPEC has: capec:id, rdfs:label, dcterms:description.\n"
         "  * snort:SnortRule has: snort:sid, rdfs:label, snort:message, snort:ruleText.\n"
+        "  * attack:Technique has: attack:id, rdfs:label, dcterms:description, attack:hasTactic ?tactic, attack:hasPlatform ?platform.\n"
+        "  * attack:Tactic has: attack:id, rdfs:label, dcterms:description.\n"
+        "  * icsa:ICSA has: icsa:id, rdfs:label, dcterms:description, icsa:hasVendor ?vendor, icsa:hasProduct ?product, icsa:cvssScore ?score.\n"
         "- Relationships:\n"
         "  * ?cve cve:hasCWE ?cwe .\n"
         "  * ?cve cve:affectsProduct ?cpe .\n"
         "  * ?cve cve:relatedCAPEC ?capec .\n"
         "  * ?cve cve:hasSnortRule ?snortRule .\n"
         "  * ?cwe cwe:relatedAttackPattern ?capec .\n"
+        "  * ?technique attack:hasTactic ?tactic .\n"
+        "  * ?icsa icsa:relatesToCVE ?cve .\n"
         "Guidelines:\n"
         "- To search for a specific CVE by its ID, query `?s cve:id ?id . FILTER(?id = \"CVE-XXXX-XXXX\")` rather than CONTAINS on description.\n"
         "- To search for general terms, use `FILTER(CONTAINS(LCASE(STR(?val)), \"search_term\"))` on rdfs:label or dcterms:description.\n"
         "- Extract key cybersecurity terms (e.g., 'malware', 'windows', 'botnet') from conversational prompts (e.g., 'tell me about...'). DO NOT include conversational filler words in your FILTER CONTAINS clauses.\n"
         "- For multi-topic, broad or general questions (e.g., relations between CVE/CPE/CWE), use OPTIONAL blocks for relationship fields so the entire query doesn't fail if some relations don't exist for all records.\n"
+        "- For MITRE ATT&CK questions (techniques, tactics, enterprise/ICS), use the attack: prefix.\n"
+        "- For ICS security advisories (CISA ICSA), use the icsa: prefix.\n"
     )
     if retry:
         guidance += "If the previous query returned no results, relax constraints and broaden filters.\n"
@@ -346,6 +355,59 @@ def _build_fallback_query(nl_query: str) -> str:
             "LIMIT 100"
         )
 
+    if any(keyword in query_text for keyword in ("att&ck", "attack", "att\u0026ck", "mitre", "technique", "tactic", "enterprise attack", "ics attack")):
+        terms = _extract_search_terms(nl_query)
+        escaped_terms = [term.replace('"', '\\"') for term in terms[:4]] if terms else []
+        filter_clause = ""
+        if escaped_terms:
+            filters = " || ".join(
+                f'CONTAINS(LCASE(STR(COALESCE(?label, ?description, ""))), "{term}")'
+                for term in escaped_terms
+            )
+            filter_clause = f"  FILTER({filters})\n"
+
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX attack: <http://w3id.org/sepses/vocab/ref/attack#>\n"
+            "SELECT DISTINCT ?s ?label ?description ?tactic ?platform WHERE {\n"
+            "  ?s a attack:Technique .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s dcterms:description ?description }\n"
+            "  OPTIONAL { ?s attack:hasTactic ?tactic }\n"
+            "  OPTIONAL { ?s attack:hasPlatform ?platform }\n"
+            f"{filter_clause}"
+            "}\n"
+            "LIMIT 100"
+        )
+
+    if any(keyword in query_text for keyword in ("icsa", "ics advisory", "ics advis", "cisa", "industrial control", "scada", "plc")):
+        terms = _extract_search_terms(nl_query)
+        escaped_terms = [term.replace('"', '\\"') for term in terms[:4]] if terms else []
+        filter_clause = ""
+        if escaped_terms:
+            filters = " || ".join(
+                f'CONTAINS(LCASE(STR(COALESCE(?label, ?description, ""))), "{term}")'
+                for term in escaped_terms
+            )
+            filter_clause = f"  FILTER({filters})\n"
+
+        return (
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+            "PREFIX dcterms: <http://purl.org/dc/terms/>\n"
+            "PREFIX icsa: <http://w3id.org/sepses/vocab/ref/icsa#>\n"
+            "SELECT DISTINCT ?s ?label ?description ?vendor ?product ?score WHERE {\n"
+            "  ?s a icsa:ICSA .\n"
+            "  OPTIONAL { ?s rdfs:label ?label }\n"
+            "  OPTIONAL { ?s dcterms:description ?description }\n"
+            "  OPTIONAL { ?s icsa:hasVendor ?vendor }\n"
+            "  OPTIONAL { ?s icsa:hasProduct ?product }\n"
+            "  OPTIONAL { ?s icsa:cvssScore ?score }\n"
+            f"{filter_clause}"
+            "}\n"
+            "LIMIT 100"
+        )
+
     terms = _extract_search_terms(nl_query)
     if not terms:
         terms = [nl_query.strip().lower()]
@@ -381,6 +443,7 @@ def _query_looks_too_generic(nl_query: str, query: str) -> bool:
             "cve", "cwe", "cpe", "capec", "snort", "malware",
             "vulnerability", "vulnerabilities", "product", "target",
             "relation", "related", "rule", "attack", "pattern",
+            "technique", "tactic", "icsa", "advisory", "ics",
         }
     ]
     if content_terms and any(term in query_text for term in content_terms):
@@ -395,6 +458,10 @@ def _query_looks_too_generic(nl_query: str, query: str) -> bool:
     if re.search(r"\?s\s+a\s+capec:capec\b", query_text) and not re.search(r"\bfilter\b", query_text):
         return True
     if re.search(r"\?s\s+a\s+snort:snortrule\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    if re.search(r"\?s\s+a\s+attack:technique\b", query_text) and not re.search(r"\bfilter\b", query_text):
+        return True
+    if re.search(r"\?s\s+a\s+icsa:icsa\b", query_text) and not re.search(r"\bfilter\b", query_text):
         return True
     return False
 
@@ -431,6 +498,10 @@ def _classify_resource(value: str | None) -> str:
         return "attack_pattern"
     if "snort" in text or "rule" in text or "signature" in text or "/snort/" in text:
         return "snort_rule"
+    if "attack" in text or "technique" in text or "tactic" in text or "/attack/" in text:
+        return "attack_technique"
+    if "icsa" in text or "advisory" in text or "ics" in text or "/icsa/" in text:
+        return "ics_advisory"
     if "cpe" in text or "vendor" in text or "product" in text:
         return "target"
     if "malware" in text or "family" in text or "threat" in text:
@@ -556,11 +627,11 @@ def _build_llm_summary_prompt(nl_query: str, bindings: list[dict[str, Any]]) -> 
 
     return (
         "You are a cybersecurity analyst summarising knowledge-graph results for a user. "
-        "The graph contains CVE, CWE, CPE, CAPEC, and Snort Rule data.\n"
+        "The graph contains CVE, CWE, CPE, CAPEC, Snort Rule, MITRE ATT&CK (techniques/tactics), and CISA ICS Advisory (ICSA) data.\n"
         f"Question: {nl_query}\n"
         f"Results:\n{data_block}\n\n"
         "Write 2-3 plain-English sentences that directly answer the question using only the data above. "
-        "Cite specific IDs (e.g. CVE-XXXX, CWE-XX, CAPEC-XX, Snort SID) found in the results. "
+        "Cite specific IDs (e.g. CVE-XXXX, CWE-XX, CAPEC-XX, Snort SID, ATT&CK technique IDs, ICSA advisory IDs) found in the results. "
         "Briefly explain what each entity represents and close with one actionable remark. "
         "Plain text only, no JSON or markdown."
     )
