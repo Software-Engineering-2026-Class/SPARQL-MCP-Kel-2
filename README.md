@@ -215,13 +215,158 @@ File `.env` berada di `main/sparqlmcp-main/.env`. Variabel utama:
 
 ## API Backend
 
-Backend FastAPI berjalan di `http://localhost:8765` dan menyediakan:
+Backend FastAPI berjalan di `http://localhost:8765` secara default. Berikut adalah dokumentasi API lengkap beserta format request dan response:
 
-| Endpoint         | Method | Deskripsi                                                                                             |
-| ---------------- | ------ | ----------------------------------------------------------------------------------------------------- |
-| `/api/nl2sparql` | POST   | Terima query bahasa natural → generate SPARQL → eksekusi → kembalikan hasil + ringkasan + graf relasi |
-| `/api/query`     | POST   | Eksekusi raw SPARQL query langsung                                                                    |
-| `/api/health`    | GET    | Health check                                                                                          |
+### 1. Health Check
+Memeriksa status kesehatan server backend.
+
+* **URL:** `/api/health` atau `/health`
+* **Method:** `GET`
+* **Response (JSON):**
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
+
+---
+
+### 2. Natural Language to SPARQL (`/api/nl2sparql`)
+Menerima pertanyaan bahasa natural dari pengguna, menerjemahkannya ke SPARQL query menggunakan LLM (dengan mekanisme auto-retry, refinement, dan fallback programmatis), mengeksekusi query tersebut pada Fuseki, membangun graf relasi (visualisasi node & edge), serta menghasilkan ringkasan (summary) berbasis LLM/ekstraktif.
+
+* **URL:** `/api/nl2sparql`
+* **Method:** `POST`
+* **Headers:** `Content-Type: application/json`
+* **Request Body (JSON):**
+  | Field | Tipe | Wajib | Deskripsi | Default |
+  | :--- | :--- | :--- | :--- | :--- |
+  | `nl_query` | String | Ya | Pertanyaan bahasa natural keamanan siber (min 1, max 2000 karakter). | - |
+  | `options` | Object | Tidak | Konfigurasi tambahan untuk pemrosesan query. | `null` |
+
+  **Struktur `options` (opsional):**
+  | Field | Tipe | Deskripsi | Default |
+  | :--- | :--- | :--- | :--- |
+  | `format` | String | Format respons SPARQL (misal: `sparql-results+json`). | `"sparql-results+json"` |
+  | `timeout_ms` | Integer | Batas waktu eksekusi query (min 1000, max 120000 ms). | `30000` |
+  | `expose_sparql` | Boolean | Sertakan teks query SPARQL yang dihasilkan di dalam respons. | `true` |
+  | `refine_on_empty` | Boolean | Lakukan perbaikan otomatis (LLM refinement/fallback) jika query awal kosong. | `true` |
+  | `use_llm_summary`| Boolean | Gunakan LLM untuk merangkum hasil query dalam bahasa natural. | `true` |
+
+* **Contoh Request:**
+  ```json
+  {
+    "nl_query": "Cari CVE terkait Log4j",
+    "options": {
+      "expose_sparql": true,
+      "use_llm_summary": true
+    }
+  }
+  ```
+
+* **Response (JSON):**
+  | Field | Tipe | Deskripsi |
+  | :--- | :--- | :--- |
+  | `trace_id` | String | ID unik transaksi untuk pelacakan. |
+  | `sparql` | String | Query SPARQL yang dieksekusi (opsional, jika `expose_sparql` aktif). |
+  | `preview` | String | Cuplikan status eksekusi query. |
+  | `results` | Object/String| Payload data mentah hasil query dari triplestore. |
+  | `graph` | Object | Struktur data node & edge untuk visualisasi graf relasi. |
+  | `summary` | Object | Ringkasan jawaban berbasis data hasil query. |
+  | `meta` | Object | Metadata performa (endpoint yang dirujuk, waktu eksekusi `elapsed_ms`). |
+
+  **Struktur `graph`:**
+  - `nodes`: List objek node `[ { "id": uri, "label": label, "group": tipe, "title": uri } ]`. Tipe group meliputi: `vulnerability`, `attack_pattern`, `snort_rule`, `attack_technique`, `ics_advisory`, `target`, `malware`.
+  - `edges`: List objek relasi `[ { "from": uri_a, "to": uri_b, "label": nama_relasi, "arrows": "to", "title": nama_relasi } ]`.
+
+  **Struktur `summary`:**
+  - `text`: Teks ringkasan dalam bahasa natural yang ramah pengguna.
+  - `source`: Sumber ringkasan (`"llm"` jika sukses via OpenRouter, atau `"extractive"` sebagai fallback lokal).
+  - `source_count`: Jumlah baris data yang digunakan sebagai basis ringkasan.
+
+* **Contoh Response:**
+  ```json
+  {
+    "trace_id": "9b1deb4d3b7d4f828a2a7b8e56112a87",
+    "sparql": "PREFIX cve: <http://w3id.org/sepses/vocab/ref/cve#>\nSELECT ?s ?label ?description WHERE { ?s a cve:CVE ; rdfs:label ?label . FILTER(CONTAINS(LCASE(?label), \"log4j\")) } LIMIT 10",
+    "preview": "status: 200, elapsed_ms: 120",
+    "results": {
+      "head": { "vars": ["s", "label", "description"] },
+      "results": {
+        "bindings": [
+          {
+            "s": { "type": "uri", "value": "http://w3id.org/sepses/resource/cve/CVE-2021-44228" },
+            "label": { "type": "literal", "value": "CVE-2021-44228" },
+            "description": { "type": "literal", "value": "Apache Log4j2 remote code execution vulnerability..." }
+          }
+        ]
+      }
+    },
+    "graph": {
+      "nodes": [
+        { "id": "search-root", "label": "Search Results", "group": "target", "title": "search-root" },
+        { "id": "http://w3id.org/sepses/resource/cve/CVE-2021-44228", "label": "CVE-2021-44228", "group": "vulnerability", "title": "http://w3id.org/sepses/resource/cve/CVE-2021-44228" }
+      ],
+      "edges": [
+        { "from": "search-root", "to": "http://w3id.org/sepses/resource/cve/CVE-2021-44228", "label": "result", "arrows": "to" }
+      ]
+    },
+    "summary": {
+      "text": "Ditemukan CVE-2021-44228 yang merupakan kerentanan eksekusi kode jarak jauh (RCE) pada Apache Log4j2. Disarankan untuk segera melakukan pembaruan ke versi terbaru.",
+      "source": "llm",
+      "source_count": 1
+    },
+    "meta": {
+      "endpoint": "http://localhost:3030/cskg/sparql",
+      "elapsed_ms": 120
+    }
+  }
+  ```
+
+---
+
+### 3. Raw SPARQL Query (`/api/query`)
+Mengeksekusi query SPARQL mentah (raw) secara langsung pada endpoint triplestore Fuseki yang sesuai (otomatis mendeteksi routing endpoint).
+
+* **URL:** `/api/query`
+* **Method:** `POST`
+* **Headers:** `Content-Type: application/json`
+* **Request Body (JSON):**
+  | Field | Tipe | Wajib | Deskripsi | Default |
+  | :--- | :--- | :--- | :--- | :--- |
+  | `query` | String | Ya | Kueri SPARQL 1.1 SELECT valid yang ingin dieksekusi. | - |
+  | `format` | String | Tidak | Format hasil (misal: `sparql-results+json`). | `"sparql-results+json"` |
+  | `timeout_ms` | Integer | Tidak | Batas waktu eksekusi kueri dalam milidetik (min 1000, max 120000 ms). | `30000` |
+
+* **Contoh Request:**
+  ```json
+  {
+    "query": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 5",
+    "format": "sparql-results+json",
+    "timeout_ms": 15000
+  }
+  ```
+
+* **Response (JSON):**
+  ```json
+  {
+    "trace_id": "a1f9e2b3c4d5e6f7g8h9i0j1k2l3m4n5",
+    "sparql": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 5",
+    "preview": "status: 200, elapsed_ms: 15",
+    "results": {
+      "head": { "vars": ["s", "p", "o"] },
+      "results": {
+        "bindings": [ ]
+      }
+    },
+    "meta": {
+      "endpoint": "http://localhost:3030/cskg/sparql",
+      "elapsed_ms": 15
+    }
+  }
+  ```
+
+---
+
 
 ## Referensi
 
