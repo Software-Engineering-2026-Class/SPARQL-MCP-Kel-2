@@ -184,6 +184,10 @@ Seed data tersimpan di `main/sparqlmcp-main/database/seed data/` dengan struktur
    SELECT (COUNT(*) AS ?triples) WHERE { ?s ?p ?o }
    ```
 
+> [!TIP]
+> **Catatan Pemecahan Masalah (Troubleshooting):**
+> Jika Anda menemui kegagalan atau error saat mengunduh, mengekstrak, atau memuat file database baru (seperti file korup atau tidak lengkap), lakukan **clone ulang repositori** (`git clone`) ke dalam direktori bersih yang baru. Cara ini terbukti memulihkan dan memastikan seluruh file database terunduh dengan utuh dan siap dimuat.
+
 ---
 
 ### Menjalankan Frontend
